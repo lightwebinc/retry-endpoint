@@ -117,3 +117,58 @@ func TestDifferentSequencesIndependent(t *testing.T) {
 		}
 	}
 }
+
+// TestSequenceLimiterSlidingWindow guards against regressing to the legacy
+// monotonic-counter behaviour: once a SequenceID's window elapses, new
+// requests must be admitted again rather than permanently blocked.
+func TestSequenceLimiterSlidingWindow(t *testing.T) {
+	l := New(Config{
+		IPRate:         1000,
+		IPBurst:        1000,
+		SenderRate:     1000,
+		SenderWindow:   time.Minute,
+		SequenceMax:    2,
+		SequenceWindow: 50 * time.Millisecond,
+	})
+
+	ip := net.ParseIP("::1")
+	var sender uint32
+	const seqID = uint32(7)
+
+	// Fill the window.
+	for i := 0; i < 2; i++ {
+		if ok, _ := l.Allow(ip, sender, seqID); !ok {
+			t.Fatalf("request %d should be allowed within window", i)
+		}
+	}
+	// Third in the same window must be dropped.
+	if ok, level := l.Allow(ip, sender, seqID); ok || level != LevelSequence {
+		t.Fatalf("expected sequence drop, got ok=%v level=%q", ok, level)
+	}
+
+	// After the window elapses the limiter must self-heal.
+	time.Sleep(75 * time.Millisecond)
+	if ok, _ := l.Allow(ip, sender, seqID); !ok {
+		t.Fatal("expected sequence limiter to admit requests after window expiry")
+	}
+}
+
+// TestSequenceLimiterDefaultWindow verifies that a zero-value SequenceWindow
+// is replaced with a sane default instead of locking the limiter open/closed.
+func TestSequenceLimiterDefaultWindow(t *testing.T) {
+	l := New(Config{
+		IPRate:       1000,
+		IPBurst:      1000,
+		SenderRate:   1000,
+		SenderWindow: time.Minute,
+		SequenceMax:  1,
+		// SequenceWindow deliberately left zero.
+	})
+	ip := net.ParseIP("::1")
+	if ok, _ := l.Allow(ip, 0, 1); !ok {
+		t.Fatal("first request must pass regardless of window default")
+	}
+	if ok, level := l.Allow(ip, 0, 1); ok || level != LevelSequence {
+		t.Fatalf("second request must be sequence-limited; got ok=%v level=%q", ok, level)
+	}
+}

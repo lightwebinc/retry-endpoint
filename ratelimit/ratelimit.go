@@ -29,19 +29,25 @@ type Limiter struct {
 
 // Config holds rate limiting configuration.
 type Config struct {
-	IPRate       float64       // Tokens per second
-	IPBurst      int           // Burst size
-	SenderRate   float64       // Requests per window
-	SenderWindow time.Duration // Sliding window duration
-	SequenceMax  int           // Max requests per SequenceID lifetime
+	IPRate         float64       // Tokens per second
+	IPBurst        int           // Burst size
+	SenderRate     float64       // Requests per window
+	SenderWindow   time.Duration // Sliding window duration
+	SequenceMax    int           // Max requests per SequenceID per SequenceWindow
+	SequenceWindow time.Duration // Sliding window duration for SequenceID limiter
 }
 
 // New constructs a new rate limiter.
 func New(cfg Config) *Limiter {
+	if cfg.SequenceWindow <= 0 {
+		// Default to 1 minute if unset — matches SenderWindow default and
+		// prevents the legacy "counter never resets" behaviour.
+		cfg.SequenceWindow = time.Minute
+	}
 	return &Limiter{
 		ipLimiter:       newIPLimiter(cfg.IPRate, cfg.IPBurst),
 		senderLimiter:   newSenderLimiter(cfg.SenderRate, cfg.SenderWindow),
-		sequenceLimiter: newSequenceLimiter(cfg.SequenceMax),
+		sequenceLimiter: newSequenceLimiter(cfg.SequenceMax, cfg.SequenceWindow),
 	}
 }
 
@@ -143,28 +149,59 @@ func (r *senderLimiter) Allow(senderID uint32) bool {
 	return true
 }
 
-// sequenceLimiter provides per-SequenceID request counting.
+// sequenceLimiter provides sliding-window rate limiting per SequenceID.
+//
+// The legacy implementation used a monotonic counter per SequenceID with no
+// expiration. That caused long-lived flows to eventually exhaust the counter
+// and drop every subsequent NACK for that flow, without any way to recover
+// short of restarting the process. The sliding-window form bounds memory and
+// self-heals: a SequenceID that has been quiet for [window] is re-admitted
+// at full capacity.
 type sequenceLimiter struct {
-	mu   sync.Mutex
-	seqs map[uint32]int
-	max  int
+	mu     sync.Mutex
+	seqs   map[uint32]*sequenceEntry
+	max    int
+	window time.Duration
 }
 
-func newSequenceLimiter(max int) *sequenceLimiter {
+type sequenceEntry struct {
+	timestamps []time.Time
+}
+
+func newSequenceLimiter(max int, window time.Duration) *sequenceLimiter {
 	return &sequenceLimiter{
-		seqs: make(map[uint32]int),
-		max:  max,
+		seqs:   make(map[uint32]*sequenceEntry),
+		max:    max,
+		window: window,
 	}
 }
 
 func (r *sequenceLimiter) Allow(sequenceID uint32) bool {
+	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	count := r.seqs[sequenceID]
-	if count >= r.max {
+	entry, ok := r.seqs[sequenceID]
+	if !ok {
+		entry = &sequenceEntry{timestamps: make([]time.Time, 0, r.max)}
+		r.seqs[sequenceID] = entry
+	}
+
+	// Drop timestamps outside the window. Expected working set is small
+	// because the window is short relative to typical flow bursts.
+	cutoff := now.Add(-r.window)
+	validIdx := 0
+	for _, ts := range entry.timestamps {
+		if ts.After(cutoff) {
+			entry.timestamps[validIdx] = ts
+			validIdx++
+		}
+	}
+	entry.timestamps = entry.timestamps[:validIdx]
+
+	if len(entry.timestamps) >= r.max {
 		return false
 	}
-	r.seqs[sequenceID] = count + 1
+	entry.timestamps = append(entry.timestamps, now)
 	return true
 }

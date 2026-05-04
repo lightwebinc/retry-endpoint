@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/lightwebinc/bitcoin-shard-common/shard"
 
+	"github.com/lightwebinc/bitcoin-retry-endpoint/beacon"
 	"github.com/lightwebinc/bitcoin-retry-endpoint/cache"
 	"github.com/lightwebinc/bitcoin-retry-endpoint/cache/memory"
 	"github.com/lightwebinc/bitcoin-retry-endpoint/cache/redis"
@@ -24,6 +26,58 @@ import (
 	"github.com/lightwebinc/bitcoin-retry-endpoint/retransmit"
 	"github.com/lightwebinc/bitcoin-retry-endpoint/server"
 )
+
+// hashInstanceID derives a 32-bit identifier for this endpoint from the
+// instance name so the listener registry can key ADVERT entries stably
+// across restarts. FNV-1a keeps the impl dependency-free.
+func hashInstanceID(s string) uint32 {
+	const (
+		offset32 uint32 = 2166136261
+		prime32  uint32 = 16777619
+	)
+	h := offset32
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime32
+	}
+	if h == 0 {
+		h = 1 // 0 is reserved / ignored by some consumers
+	}
+	return h
+}
+
+// pickBeaconNACKAddr returns a suitable IPv6 unicast address for the ADVERT
+// NACKAddr field. If an explicit address is configured it is returned.
+// Otherwise the first global-unicast address on the given interface is used.
+func pickBeaconNACKAddr(explicit string, iface *net.Interface) (net.IP, error) {
+	if explicit != "" {
+		ip := net.ParseIP(explicit)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid nack-addr %q", explicit)
+		}
+		return ip.To16(), nil
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil, fmt.Errorf("iface %s addrs: %w", iface.Name, err)
+	}
+	for _, a := range addrs {
+		var ip net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip == nil || ip.To4() != nil {
+			continue
+		}
+		if ip.IsGlobalUnicast() && !ip.IsLinkLocalUnicast() {
+			return ip.To16(), nil
+		}
+	}
+	return nil, fmt.Errorf("no global-unicast IPv6 address on %s; set -nack-addr explicitly", iface.Name)
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -107,11 +161,12 @@ func run() error {
 
 	// Build rate limiter.
 	rl := ratelimit.New(ratelimit.Config{
-		IPRate:       cfg.RLIPRate,
-		IPBurst:      cfg.RLIPBurst,
-		SenderRate:   cfg.RLSenderRate,
-		SenderWindow: cfg.RLSenderWindow,
-		SequenceMax:  cfg.RLSequenceMax,
+		IPRate:         cfg.RLIPRate,
+		IPBurst:        cfg.RLIPBurst,
+		SenderRate:     cfg.RLSenderRate,
+		SenderWindow:   cfg.RLSenderWindow,
+		SequenceMax:    cfg.RLSequenceMax,
+		SequenceWindow: cfg.RLSequenceWindow,
 	})
 
 	// Build retransmitter.
@@ -123,6 +178,8 @@ func run() error {
 
 	// Build server.
 	srv := server.New(cfg.NACKPort, c, rl, rec, retrans, cfg.NACKWorkers, cfg.Debug)
+	srv.SetSuppressACK(cfg.SuppressACK)
+	srv.SetSuppressMISS(cfg.SuppressMISS)
 
 	// Build ingress worker.
 	ing := ingress.New(mcIface, cfg.ListenPort, groups, c, rec, cfg.CacheTTL, cfg.Debug)
@@ -157,6 +214,51 @@ func run() error {
 			slog.Error("server exited with error", "err", err)
 		}
 	}()
+
+	// Start beacon sender.
+	if cfg.BeaconEnabled {
+		beaconIface := egressIfaces[0]
+		nackIP, perr := pickBeaconNACKAddr(cfg.BeaconNACKAddr, beaconIface)
+		if perr != nil {
+			return fmt.Errorf("beacon: %w", perr)
+		}
+		var flags uint16
+		if cfg.BeaconFlagsUnicast {
+			flags |= beacon.FlagUnicastRetransmit
+		}
+		if cfg.BeaconFlagsMulticast {
+			flags |= beacon.FlagMulticastRetransmit
+		}
+		if cfg.BeaconFlagsDraining {
+			flags |= beacon.FlagDraining
+		}
+		host := cfg.InstanceID
+		if host == "" {
+			if h, herr := os.Hostname(); herr == nil {
+				host = h
+			}
+		}
+		beaconCfg := beacon.Config{
+			NACKAddr:    nackIP,
+			NACKPort:    uint16(cfg.NACKPort),
+			Tier:        uint8(cfg.BeaconTier),
+			Preference:  uint8(cfg.BeaconPreference),
+			Interval:    cfg.BeaconInterval,
+			Scope:       cfg.BeaconScopeByte,
+			Flags:       flags,
+			InstanceID:  hashInstanceID(host),
+			MiddleBytes: cfg.MCMiddleBytes,
+			Iface:       beaconIface,
+		}
+		beaconSender := beacon.New(beaconCfg)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := beaconSender.Run(ctx); err != nil {
+				slog.Error("beacon exited with error", "err", err)
+			}
+		}()
+	}
 
 	// Wait for signal.
 	sigCh := make(chan os.Signal, 1)

@@ -38,23 +38,25 @@ type Recorder struct {
 	shutdownFn func(context.Context) error
 
 	// Cache metrics
-	cacheHits     metric.Int64Counter
-	cacheMisses   metric.Int64Counter
-	cacheSize     metric.Int64Gauge
-	cacheErrors   metric.Int64Counter
+	cacheHits   metric.Int64Counter
+	cacheMisses metric.Int64Counter
+	cacheSize   metric.Int64Gauge
+	cacheErrors metric.Int64Counter
 
 	// Server metrics
-	nackRequests    metric.Int64Counter
-	retransmits     metric.Int64Counter
-	retransmitDedup metric.Int64Counter
+	nackRequests       metric.Int64Counter
+	retransmits        metric.Int64Counter
+	retransmitDedup    metric.Int64Counter
+	responsesSent      metric.Int64Counter // labelled type={ack,miss}
+	responseSendErrors metric.Int64Counter
 
 	// Rate limit metrics
 	rateLimitDrops metric.Int64Counter
 
 	// Ingress metrics
 	framesReceived metric.Int64Counter
-	framesCached  metric.Int64Counter
-	framesDropped metric.Int64Counter
+	framesCached   metric.Int64Counter
+	framesDropped  metric.Int64Counter
 }
 
 func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval time.Duration) (*Recorder, error) {
@@ -160,6 +162,14 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		metric.WithDescription("Retransmissions dropped due to deduplication")); err != nil {
 		return nil, err
 	}
+	if r.responsesSent, err = meter.Int64Counter("bre_responses_sent_total",
+		metric.WithDescription("ACK/MISS responses successfully written to the NACK socket")); err != nil {
+		return nil, err
+	}
+	if r.responseSendErrors, err = meter.Int64Counter("bre_response_send_errors_total",
+		metric.WithDescription("ACK/MISS responses that failed to send (WriteTo error)")); err != nil {
+		return nil, err
+	}
 
 	if r.rateLimitDrops, err = meter.Int64Counter("bre_rate_limit_drops_total",
 		metric.WithDescription("Requests dropped due to rate limiting")); err != nil {
@@ -208,6 +218,21 @@ func (r *Recorder) Retransmit() {
 
 func (r *Recorder) RetransmitDedup() {
 	r.retransmitDedup.Add(context.Background(), 1)
+}
+
+// ResponseSent records an ACK or MISS datagram successfully written to the
+// NACK socket. typ must be "ack" or "miss".
+func (r *Recorder) ResponseSent(typ string) {
+	r.responsesSent.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("type", typ),
+	))
+}
+
+// ResponseSendError records a failed WriteTo for an ACK or MISS response.
+func (r *Recorder) ResponseSendError(typ string) {
+	r.responseSendErrors.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("type", typ),
+	))
 }
 
 func (r *Recorder) RateLimitDrop(level string) {

@@ -270,8 +270,20 @@ func (s *Server) sendResponse(conn net.PacketConn, src *net.UDPAddr, msgType byt
 	binary.BigEndian.PutUint32(buf[16:20], seqNum)
 	// buf[20:24] reserved (zero)
 
+	label := "ack"
+	if msgType == msgTypeMISS {
+		label = "miss"
+	}
+
 	if _, err := conn.WriteTo(buf[:], src); err != nil {
-		s.log.Debug("failed to send response", "type", fmt.Sprintf("0x%02X", msgType), "err", err)
+		if s.rec != nil {
+			s.rec.ResponseSendError(label)
+		}
+		s.log.Warn("failed to send response", "type", fmt.Sprintf("0x%02X", msgType), "dst", src.String(), "err", err)
+		return
+	}
+	if s.rec != nil {
+		s.rec.ResponseSent(label)
 	}
 }
 
