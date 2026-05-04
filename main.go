@@ -176,8 +176,17 @@ func run() error {
 	}
 	defer func() { _ = retrans.Close() }()
 
+	// Resolve NACK bind address. This is used to bind the NACK listening
+	// socket so ACK/MISS responses are sourced from the correct address
+	// (avoids kernel SLAAC source-address selection mismatch).
+	nackBindIP, err := pickBeaconNACKAddr(cfg.BeaconNACKAddr, egressIfaces[0])
+	if err != nil {
+		return fmt.Errorf("resolve nack bind address: %w", err)
+	}
+
 	// Build server.
 	srv := server.New(cfg.NACKPort, c, rl, rec, retrans, cfg.NACKWorkers, cfg.Debug)
+	srv.SetBindAddr(nackBindIP.String())
 	srv.SetSuppressACK(cfg.SuppressACK)
 	srv.SetSuppressMISS(cfg.SuppressMISS)
 

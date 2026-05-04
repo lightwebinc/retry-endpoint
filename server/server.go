@@ -34,6 +34,7 @@ const (
 // Server receives NACK requests and coordinates retransmissions.
 type Server struct {
 	port         int
+	bindAddr     string // specific IPv6 address to bind; empty = [::]
 	cache        cache.Cache
 	rateLimiter  *ratelimit.Limiter
 	rec          *metrics.Recorder
@@ -78,9 +79,19 @@ func (s *Server) SetSuppressACK(v bool) { s.suppressACK = v }
 // SetSuppressMISS disables MISS responses.
 func (s *Server) SetSuppressMISS(v bool) { s.suppressMISS = v }
 
+// SetBindAddr sets the specific IPv6 address the NACK socket binds to.
+// When set, ACK/MISS responses are sourced from this address, avoiding
+// kernel source-address selection (which may pick a SLAAC-derived address
+// that does not match what listeners expect).
+func (s *Server) SetBindAddr(addr string) { s.bindAddr = addr }
+
 // Run starts the UDP server with a worker pool.
 func (s *Server) Run(ctx context.Context) error {
-	conn, err := net.ListenPacket("udp6", fmt.Sprintf("[::]:%d", s.port))
+	host := "::"
+	if s.bindAddr != "" {
+		host = s.bindAddr
+	}
+	conn, err := net.ListenPacket("udp6", fmt.Sprintf("[%s]:%d", host, s.port))
 	if err != nil {
 		return fmt.Errorf("server: listen: %w", err)
 	}
