@@ -16,11 +16,11 @@ func TestIPRateLimit(t *testing.T) {
 	})
 
 	ip := net.ParseIP("::1")
-	var id [16]byte
+	var id uint32
 
 	// First two should pass (burst).
-	for i := 0; i < 2; i++ {
-		ok, _ := l.Allow(ip, id, uint64(i))
+	for i := uint32(0); i < 2; i++ {
+		ok, _ := l.Allow(ip, id, i)
 		if !ok {
 			t.Fatalf("request %d should be allowed within burst", i)
 		}
@@ -46,12 +46,11 @@ func TestSenderRateLimit(t *testing.T) {
 	})
 
 	ip := net.ParseIP("::1")
-	var sender [16]byte
-	sender[0] = 0xAB
+	var sender uint32 = 0xAB
 
 	// First two requests in window should pass.
-	for i := 0; i < 2; i++ {
-		ok, _ := l.Allow(ip, sender, uint64(i))
+	for i := uint32(0); i < 2; i++ {
+		ok, _ := l.Allow(ip, sender, i)
 		if !ok {
 			t.Fatalf("request %d should be allowed within sender window", i)
 		}
@@ -77,8 +76,8 @@ func TestSequenceRateLimit(t *testing.T) {
 	})
 
 	ip := net.ParseIP("::1")
-	var sender [16]byte
-	const seqID = uint64(42)
+	var sender uint32
+	const seqID = uint32(42)
 
 	// First three requests for same seqID should pass.
 	for i := 0; i < 3; i++ {
@@ -108,10 +107,10 @@ func TestDifferentSequencesIndependent(t *testing.T) {
 	})
 
 	ip := net.ParseIP("::1")
-	var sender [16]byte
+	var sender uint32
 
 	// Each unique seqID gets its own counter.
-	for i := uint64(0); i < 5; i++ {
+	for i := uint32(0); i < 5; i++ {
 		ok, _ := l.Allow(ip, sender, i)
 		if !ok {
 			t.Fatalf("seqID %d should be allowed (first request)", i)

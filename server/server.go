@@ -17,18 +17,32 @@ import (
 	"github.com/lightwebinc/bitcoin-retry-endpoint/ratelimit"
 )
 
-const NACKSize = 72 // bytes
+// NACKSize is the fixed size of a BRC-125 NACK datagram (56 bytes).
+// See docs/brc-125-retransmission-protocol.md for the wire format.
+const NACKSize = 56
+
+// ResponseSize is the fixed size of a BRC-125 ACK or MISS response (24 bytes).
+const ResponseSize = 24
+
+// MsgType constants for BRC-125 protocol messages.
+const (
+	msgTypeNACK byte = 0x10
+	msgTypeMISS byte = 0x11
+	msgTypeACK  byte = 0x12
+)
 
 // Server receives NACK requests and coordinates retransmissions.
 type Server struct {
-	port        int
-	cache       cache.Cache
-	rateLimiter *ratelimit.Limiter
-	rec         *metrics.Recorder
-	retransmit  Retransmitter
-	workers     int
-	debug       bool
-	log         *slog.Logger
+	port         int
+	cache        cache.Cache
+	rateLimiter  *ratelimit.Limiter
+	rec          *metrics.Recorder
+	retransmit   Retransmitter
+	workers      int
+	debug        bool
+	suppressACK  bool // if true, do not send ACK responses
+	suppressMISS bool // if true, do not send MISS responses
+	log          *slog.Logger
 }
 
 // Retransmitter is the interface for retransmitting cached frames.
@@ -58,6 +72,12 @@ func New(
 	}
 }
 
+// SetSuppressACK disables ACK responses (for high-volume deployments).
+func (s *Server) SetSuppressACK(v bool) { s.suppressACK = v }
+
+// SetSuppressMISS disables MISS responses.
+func (s *Server) SetSuppressMISS(v bool) { s.suppressMISS = v }
+
 // Run starts the UDP server with a worker pool.
 func (s *Server) Run(ctx context.Context) error {
 	conn, err := net.ListenPacket("udp6", fmt.Sprintf("[::]:%d", s.port))
@@ -74,8 +94,8 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	type nackRequest struct {
-		data  []byte
-		srcIP net.IP
+		data []byte
+		src  *net.UDPAddr // full source address for response sending
 	}
 
 	// Worker pool for parallel request handling.
@@ -95,7 +115,7 @@ func (s *Server) Run(ctx context.Context) error {
 					if !ok {
 						return
 					}
-					s.processNACK(workerID, req.data, req.srcIP)
+					s.processNACK(conn, workerID, req.data, req.src)
 				}
 			}
 		}(i)
@@ -128,13 +148,10 @@ func (s *Server) Run(ctx context.Context) error {
 				continue
 			}
 
-			// Extract source IP.
-			var srcIP net.IP
+			// Extract source UDPAddr.
+			var srcAddr *net.UDPAddr
 			if udpAddr, ok := src.(*net.UDPAddr); ok {
-				srcIP = udpAddr.IP
-			}
-			if srcIP == nil {
-				srcIP = net.IPv6unspecified
+				srcAddr = udpAddr
 			}
 
 			// Copy the datagram for the worker.
@@ -142,7 +159,7 @@ func (s *Server) Run(ctx context.Context) error {
 			copy(datagram, buf[:n])
 
 			select {
-			case requests <- nackRequest{data: datagram, srcIP: srcIP}:
+			case requests <- nackRequest{data: datagram, src: srcAddr}:
 			case <-ctx.Done():
 				close(requests)
 				wg.Wait()
@@ -152,7 +169,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-func (s *Server) processNACK(workerID int, datagram []byte, srcIP net.IP) {
+func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte, src *net.UDPAddr) {
 	if s.rec != nil {
 		s.rec.NACKRequest()
 	}
@@ -163,13 +180,19 @@ func (s *Server) processNACK(workerID int, datagram []byte, srcIP net.IP) {
 		return
 	}
 
-	// Extract fields.
+	// Extract fields (BRC-125 56-byte format).
 	txID := extractTxID(datagram)
 	senderID := extractSenderID(datagram)
 	sequenceID := extractSequenceID(datagram)
 	seqNum := extractSeqNum(datagram)
 
 	// Rate limiting.
+	var srcIP net.IP
+	if src != nil {
+		srcIP = src.IP
+	} else {
+		srcIP = net.IPv6unspecified
+	}
 	allowed, level := s.rateLimiter.Allow(srcIP, senderID, sequenceID)
 	if !allowed {
 		if s.rec != nil {
@@ -181,11 +204,11 @@ func (s *Server) processNACK(workerID int, datagram []byte, srcIP net.IP) {
 		return
 	}
 
-	// Build cache key.
-	key := make([]byte, 32)
-	copy(key[0:16], senderID[:])
-	binary.BigEndian.PutUint64(key[16:24], sequenceID)
-	binary.BigEndian.PutUint64(key[24:32], seqNum)
+	// Build cache key from uint32 fields.
+	key := make([]byte, 12)
+	binary.BigEndian.PutUint32(key[0:4], senderID)
+	binary.BigEndian.PutUint32(key[4:8], sequenceID)
+	binary.BigEndian.PutUint32(key[8:12], seqNum)
 
 	// Retrieve from cache.
 	raw, err := s.cache.Retrieve(key)
@@ -202,6 +225,10 @@ func (s *Server) processNACK(workerID int, datagram []byte, srcIP net.IP) {
 		}
 		if s.debug {
 			s.log.Debug("cache miss", "seq", seqNum)
+		}
+		// Send MISS response.
+		if !s.suppressMISS && src != nil {
+			s.sendResponse(conn, src, msgTypeMISS, 0, senderID, sequenceID, seqNum)
 		}
 		return
 	}
@@ -220,12 +247,35 @@ func (s *Server) processNACK(workerID int, datagram []byte, srcIP net.IP) {
 		s.rec.Retransmit()
 	}
 
+	// Send ACK response.
+	if !s.suppressACK && src != nil {
+		var flags byte = 0x01 // multicast_sent (default)
+		s.sendResponse(conn, src, msgTypeACK, flags, senderID, sequenceID, seqNum)
+	}
+
 	if s.debug {
 		s.log.Debug("retransmitted frame", "txid", fmt.Sprintf("%x", txID[:8]), "seq", seqNum)
 	}
 }
 
-// validateNACK checks the NACK datagram format.
+// sendResponse sends a 24-byte ACK or MISS response to src.
+func (s *Server) sendResponse(conn net.PacketConn, src *net.UDPAddr, msgType byte, flags byte, senderID, sequenceID, seqNum uint32) {
+	var buf [ResponseSize]byte
+	binary.BigEndian.PutUint32(buf[0:4], frame.MagicBSV)
+	binary.BigEndian.PutUint16(buf[4:6], frame.ProtoVer)
+	buf[6] = msgType
+	buf[7] = flags
+	binary.BigEndian.PutUint32(buf[8:12], senderID)
+	binary.BigEndian.PutUint32(buf[12:16], sequenceID)
+	binary.BigEndian.PutUint32(buf[16:20], seqNum)
+	// buf[20:24] reserved (zero)
+
+	if _, err := conn.WriteTo(buf[:], src); err != nil {
+		s.log.Debug("failed to send response", "type", fmt.Sprintf("0x%02X", msgType), "err", err)
+	}
+}
+
+// validateNACK checks the NACK datagram format (BRC-125, 56 bytes).
 func validateNACK(datagram []byte) error {
 	if len(datagram) != NACKSize {
 		return fmt.Errorf("invalid NACK size: %d", len(datagram))
@@ -244,34 +294,31 @@ func validateNACK(datagram []byte) error {
 	}
 
 	// Check message type (byte 6) - should be 0x10 for NACK.
-	msgType := datagram[6]
-	if msgType != 0x10 {
-		return fmt.Errorf("invalid message type: 0x%02X", msgType)
+	if datagram[6] != msgTypeNACK {
+		return fmt.Errorf("invalid message type: 0x%02X", datagram[6])
 	}
 
 	return nil
 }
 
-// extractTxID extracts the TxID from a NACK datagram (bytes 8-40).
+// extractTxID extracts the TxID from a NACK datagram (bytes 8-39).
 func extractTxID(datagram []byte) [32]byte {
 	var txID [32]byte
 	copy(txID[:], datagram[8:40])
 	return txID
 }
 
-// extractSenderID extracts the SenderID from a NACK datagram (bytes 48-64).
-func extractSenderID(datagram []byte) [16]byte {
-	var senderID [16]byte
-	copy(senderID[:], datagram[48:64])
-	return senderID
+// extractSenderID extracts the SenderID (uint32) from a NACK datagram (bytes 40-43).
+func extractSenderID(datagram []byte) uint32 {
+	return binary.BigEndian.Uint32(datagram[40:44])
 }
 
-// extractSequenceID extracts the SequenceID from a NACK datagram (bytes 64-72).
-func extractSequenceID(datagram []byte) uint64 {
-	return binary.BigEndian.Uint64(datagram[64:72])
+// extractSequenceID extracts the SequenceID (uint32) from a NACK datagram (bytes 44-47).
+func extractSequenceID(datagram []byte) uint32 {
+	return binary.BigEndian.Uint32(datagram[44:48])
 }
 
-// extractSeqNum extracts the SeqNum from a NACK datagram (bytes 40-48).
-func extractSeqNum(datagram []byte) uint64 {
-	return binary.BigEndian.Uint64(datagram[40:48])
+// extractSeqNum extracts the SeqNum (uint32) from a NACK datagram (bytes 48-51).
+func extractSeqNum(datagram []byte) uint32 {
+	return binary.BigEndian.Uint32(datagram[48:52])
 }

@@ -47,7 +47,7 @@ func New(cfg Config) *Limiter {
 
 // Allow checks if the request should be allowed based on all three levels.
 // Returns (true, "") if allowed, (false, level) if rate limited.
-func (r *Limiter) Allow(srcIP net.IP, senderID [16]byte, sequenceID uint64) (bool, Level) {
+func (r *Limiter) Allow(srcIP net.IP, senderID uint32, sequenceID uint32) (bool, Level) {
 	if !r.ipLimiter.Allow(srcIP) {
 		return false, LevelIP
 	}
@@ -108,8 +108,8 @@ func newSenderLimiter(ratePerSec float64, window time.Duration) *senderLimiter {
 	}
 }
 
-func (r *senderLimiter) Allow(senderID [16]byte) bool {
-	key := fmt.Sprintf("%x", senderID)
+func (r *senderLimiter) Allow(senderID uint32) bool {
+	key := fmt.Sprintf("%08x", senderID)
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -146,18 +146,18 @@ func (r *senderLimiter) Allow(senderID [16]byte) bool {
 // sequenceLimiter provides per-SequenceID request counting.
 type sequenceLimiter struct {
 	mu   sync.Mutex
-	seqs map[uint64]int
+	seqs map[uint32]int
 	max  int
 }
 
 func newSequenceLimiter(max int) *sequenceLimiter {
 	return &sequenceLimiter{
-		seqs: make(map[uint64]int),
+		seqs: make(map[uint32]int),
 		max:  max,
 	}
 }
 
-func (r *sequenceLimiter) Allow(sequenceID uint64) bool {
+func (r *sequenceLimiter) Allow(sequenceID uint32) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

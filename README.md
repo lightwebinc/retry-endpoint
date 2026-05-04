@@ -10,7 +10,8 @@ Caching endpoint for multicast NACK-based retransmission of missed Bitcoin trans
 
 - **Ingress**: Single-worker multicast receiver (SO_REUSEPORT) joins all shard groups
 - **Cache**: Modular backend supporting Redis (primary) or in-memory (fallback)
-- **Server**: UDP NACK receiver with worker pool for parallel request handling
+- **Server**: UDP NACK receiver (BRC-125, 56-byte) with worker pool and ACK/MISS responses
+- **Beacon**: ADVERT beacon sender for dynamic endpoint discovery (BRC-125)
 - **Rate Limiting**: Three-level limiting (IP, SenderID, SequenceID) with silent drops
 - **Retransmit**: Sharding-based multicast egress with Redis-backed cross-instance deduplication
 - **Metrics**: Prometheus + OTLP with `bre_` prefix
@@ -67,6 +68,15 @@ All flags have environment variable equivalents (e.g., `-mc-iface` → `MC_IFACE
 - `-otlp-endpoint` (OTLP_ENDPOINT): OTLP gRPC endpoint (empty = disabled)
 - `-otlp-interval` (OTLP_INTERVAL): OTLP push interval (default: `30s`)
 
+### Beacon (BRC-125 Endpoint Discovery)
+- `-beacon-enabled` (BEACON_ENABLED): Enable ADVERT beacon multicasting (default: `true`)
+- `-beacon-tier` (BEACON_TIER): Tier level, 0 = closest to source (default: `0`)
+- `-beacon-preference` (BEACON_PREFERENCE): Weight within tier, higher = preferred (default: `128`)
+- `-beacon-interval` (BEACON_INTERVAL): Beacon multicast interval (default: `60s`)
+- `-beacon-scope` (BEACON_SCOPE): `site | global | both` (default: `site`)
+- `-suppress-ack` (SUPPRESS_ACK): Disable ACK responses (default: `false`)
+- `-suppress-miss` (SUPPRESS_MISS): Disable MISS responses (default: `false`)
+
 ### Runtime
 - `-debug` (DEBUG): Enable per-packet debug logging (default: `false`)
 - `-drain-timeout` (DRAIN_TIMEOUT): Pre-drain delay before closing sockets (default: `0s`)
@@ -75,7 +85,8 @@ All flags have environment variable equivalents (e.g., `-mc-iface` → `MC_IFACE
 
 - **No batch retrieval**: NACK format enforces single-frame requests
 - **Retransmit deduplication**: Cross-instance coordination via Redis SET NX (60s window) prevents multiple endpoints from retransmitting the same frame
-- **Frame validation**: Only retransmits cached frames with valid headers; missing frames are silently dropped
+- **Frame validation**: Only retransmits cached frames with valid headers
+- **ACK/MISS responses**: 24-byte responses to NACK senders for cache hit (ACK) or miss (MISS)
 - **Rate limiting**: Silent drops at IP, SenderID, and SequenceID levels
 
 ## Deployment Notes
@@ -83,7 +94,7 @@ All flags have environment variable equivalents (e.g., `-mc-iface` → `MC_IFACE
 - **Single ingress worker**: Linux delivers multicast to ALL SO_REUSEPORT sockets; multiple workers would store each frame N times
 - **Multicast scoping**: Ensure retry endpoints join the same scope as proxy/listener
 - **Redis availability**: If Redis is unavailable, in-memory fallback loses cache on restart and cross-instance dedup coordination
-- **Endpoint discovery**: Static list in listener `-retry-endpoints` config; future: DNS SRV or etcd
+- **Endpoint discovery**: Dynamic via BRC-125 ADVERT beacons; static seed list as fallback
 
 ## Metrics
 
@@ -97,6 +108,13 @@ All metrics use the `bre_` prefix:
 
 - `bitcoin-shard-common`: Provides frame encoding/decoding and sharding engine
 - `bitcoin-shard-listener`: Listeners send NACK requests to retry endpoints when gaps are detected
+
+## Protocol References
+
+- [BRC-124 Frame Format](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/brc-124-frame-format.md)
+- [BRC-125 Retransmission Protocol](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/brc-125-retransmission-protocol.md)
+- [BRC-126 Multicast Addressing](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/brc-126-multicast-addressing.md)
+- [NACK Retransmission Flow](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/nack-retransmission-flow.md)
 
 ## Future Enhancements
 
@@ -114,7 +132,7 @@ This would reduce redundant NACK traffic when multiple listeners miss the same f
 - Use a sliding window (e.g., 5-10 seconds) to expire entries
 - Check tracker before sending NACKs: if the gap was recently retransmitted, suppress the NACK
 
-The dedup key would be: SenderID (16B) + SequenceID (8B) + SeqNum (8B) = 32B, matching the retry endpoint's dedup key format.
+The dedup key would be: SenderID (4B) + SequenceID (4B) + SeqNum (4B) = 12B, matching the retry endpoint's cache key format.
 
 ## License
 
