@@ -102,7 +102,7 @@ func Load() (*Config, error) {
 		"cache backend: redis | memory")
 	flag.StringVar(&c.RedisAddr, "redis-addr", envStr("REDIS_ADDR", "localhost:6379"),
 		"Redis server address")
-	flag.DurationVar(&c.CacheTTL, "cache-ttl", envDuration("CACHE_TTL", 10*time.Minute),
+	flag.DurationVar(&c.CacheTTL, "cache-ttl", envDuration("CACHE_TTL", 60*time.Second),
 		"cache TTL for frames")
 	flag.IntVar(&c.CacheMaxKeys, "cache-max-keys", envInt("CACHE_MAX_KEYS", 0),
 		"maximum number of keys in cache (0 = no limit)")

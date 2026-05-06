@@ -4,13 +4,13 @@ Caching endpoint for multicast NACK-based retransmission of missed Bitcoin trans
 
 ## Overview
 
-`bitcoin-retry-endpoint` joins IPv6 multicast groups to receive BSV transaction frames, caches them with a configurable TTL (default 10 minutes), and retransmits frames on demand via NACK requests. It operates in multicast listener mode, ensuring all retry endpoints receive all frames from all proxies for natural redundancy and cache consistency.
+`bitcoin-retry-endpoint` joins IPv6 multicast groups to receive BSV transaction frames, caches them with a configurable TTL (default 60 seconds), and retransmits frames on demand via NACK requests. It operates in multicast listener mode, ensuring all retry endpoints receive all frames from all proxies for natural redundancy and cache consistency.
 
 ## Architecture
 
 - **Ingress**: Single-worker multicast receiver (SO_REUSEPORT) joins all shard groups
 - **Cache**: Modular backend supporting Redis (primary) or in-memory (fallback)
-- **Server**: UDP NACK receiver (BRC-TBD-retransmission, 56-byte) with worker pool and ACK/MISS responses
+- **Server**: UDP NACK receiver (BRC-TBD-retransmission, 24-byte) with worker pool and ACK/MISS responses
 - **Beacon**: ADVERT beacon sender for dynamic endpoint discovery (BRC-TBD-retransmission)
 - **Rate Limiting**: Two-level limiting (per-IP token bucket, per-LookupSeq sliding window) with silent drops
 - **Retransmit**: Sharding-based multicast egress with Redis-backed cross-instance deduplication
@@ -43,7 +43,7 @@ All flags have environment variable equivalents (e.g., `-mc-iface` → `MC_IFACE
 ### Cache
 - `-cache-backend` (CACHE_BACKEND): `redis | memory` (default: `memory`)
 - `-redis-addr` (REDIS_ADDR): Redis server address (default: `localhost:6379`)
-- `-cache-ttl` (CACHE_TTL): Cache TTL (default: `10m`)
+- `-cache-ttl` (CACHE_TTL): Cache TTL (default: `60s`)
 - `-cache-max-keys` (CACHE_MAX_KEYS): Maximum keys (0 = no limit)
 
 ### Server (NACK Receive)
@@ -86,7 +86,7 @@ All flags have environment variable equivalents (e.g., `-mc-iface` → `MC_IFACE
 - **No batch retrieval**: NACK format enforces single-frame requests
 - **Retransmit deduplication**: Cross-instance coordination via Redis SET NX (60s window) prevents multiple endpoints from retransmitting the same frame
 - **Frame validation**: Only retransmits cached frames with valid headers
-- **ACK/MISS responses**: 24-byte responses to NACK senders for cache hit (ACK) or miss (MISS)
+- **ACK/MISS responses**: 16-byte responses to NACK senders for cache hit (ACK) or miss (MISS)
 - **Rate limiting**: Silent drops at IP and LookupSeq levels; SenderID was removed from the BRC-124 NACK wire format and is no longer a rate-limiting key
 
 ## Deployment Notes
