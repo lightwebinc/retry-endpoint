@@ -10,8 +10,8 @@ Caching endpoint for multicast NACK-based retransmission of missed Bitcoin trans
 
 - **Ingress**: Single-worker multicast receiver (SO_REUSEPORT) joins all shard groups
 - **Cache**: Modular backend supporting Redis (primary) or in-memory (fallback)
-- **Server**: UDP NACK receiver (BRC-TBD-retransmission, 24-byte) with worker pool and ACK/MISS responses
-- **Beacon**: ADVERT beacon sender for dynamic endpoint discovery (BRC-TBD-retransmission)
+- **Server**: UDP NACK receiver (BRC-126, 24-byte) with worker pool and ACK/MISS responses
+- **Beacon**: ADVERT beacon sender for dynamic endpoint discovery (BRC-126)
 - **Rate Limiting**: Two-level limiting (per-IP token bucket, per-LookupSeq sliding window) with silent drops
 - **Retransmit**: Sharding-based multicast egress with Redis-backed cross-instance deduplication
 - **Metrics**: Prometheus + OTLP with `bre_` prefix
@@ -68,7 +68,7 @@ All flags have environment variable equivalents (e.g., `-mc-iface` → `MC_IFACE
 - `-otlp-endpoint` (OTLP_ENDPOINT): OTLP gRPC endpoint (empty = disabled)
 - `-otlp-interval` (OTLP_INTERVAL): OTLP push interval (default: `30s`)
 
-### Beacon (BRC-TBD-retransmission Endpoint Discovery)
+### Beacon (BRC-126 Endpoint Discovery)
 - `-beacon-enabled` (BEACON_ENABLED): Enable ADVERT beacon multicasting (default: `true`)
 - `-beacon-tier` (BEACON_TIER): Tier level, 0 = closest to source (default: `0`)
 - `-beacon-preference` (BEACON_PREFERENCE): Weight within tier, higher = preferred (default: `128`)
@@ -94,7 +94,7 @@ All flags have environment variable equivalents (e.g., `-mc-iface` → `MC_IFACE
 - **Single ingress worker**: Linux delivers multicast to ALL SO_REUSEPORT sockets; multiple workers would store each frame N times
 - **Multicast scoping**: Ensure retry endpoints join the same scope as proxy/listener
 - **Redis availability**: If Redis is unavailable, in-memory fallback loses cache on restart and cross-instance dedup coordination
-- **Endpoint discovery**: Dynamic via BRC-TBD-retransmission ADVERT beacons; static seed list as fallback
+- **Endpoint discovery**: Dynamic via BRC-126 ADVERT beacons; static seed list as fallback
 
 ## Metrics
 
@@ -112,7 +112,7 @@ All metrics use the `bre_` prefix:
 ## Protocol References
 
 - [BRC-124 Frame Format](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/brc-124-frame-format.md)
-- [BRC-TBD-retransmission (Retransmission Protocol)](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/brc-tbd-retransmission-protocol.md)
+- [BRC-126 (Retransmission Protocol)](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/brc-tbd-retransmission-protocol.md)
 - [BRC-TBD-addressing (Multicast Addressing)](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/brc-tbd-multicast-addressing.md)
 - [NACK Retransmission Flow](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/nack-retransmission-flow.md)
 
