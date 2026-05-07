@@ -163,7 +163,7 @@ multicast group:
 | `both` | both | Mixed deployments |
 
 The ADVERT carries the endpoint's NACKAddr, NACKPort, Tier, Preference, Flags,
-and a stable InstanceID (FNV-1a hash of the hostname). Listeners upsert endpoints
+and a stable InstanceID (CRC32c hash of the hostname). Listeners upsert endpoints
 into a `discovery.Registry` sorted by **(Tier ASC, Preference DESC)**; entries not
 refreshed within `3 × beacon-interval` are evicted automatically.
 

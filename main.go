@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"hash/crc32"
 	"log/slog"
 	"net"
 	"os"
@@ -29,17 +30,10 @@ import (
 
 // hashInstanceID derives a 32-bit identifier for this endpoint from the
 // instance name so the listener registry can key ADVERT entries stably
-// across restarts. FNV-1a keeps the impl dependency-free.
+// across restarts. CRC32c is hardware-accelerated on x86 (SSE4.2) and
+// ARM (ARMv8 CRC extensions).
 func hashInstanceID(s string) uint32 {
-	const (
-		offset32 uint32 = 2166136261
-		prime32  uint32 = 16777619
-	)
-	h := offset32
-	for i := 0; i < len(s); i++ {
-		h ^= uint32(s[i])
-		h *= prime32
-	}
+	h := crc32.Checksum([]byte(s), crc32.MakeTable(crc32.Castagnoli))
 	if h == 0 {
 		h = 1 // 0 is reserved / ignored by some consumers
 	}
