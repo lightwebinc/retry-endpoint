@@ -3,7 +3,7 @@ module github.com/lightwebinc/bitcoin-retry-endpoint
 go 1.25.9
 
 require (
-	github.com/lightwebinc/bitcoin-shard-common v0.0.0-00010101000000-000000000000
+	github.com/lightwebinc/bitcoin-shard-common v0.3.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.7.3
 	go.opentelemetry.io/otel v1.43.0
@@ -41,5 +41,3 @@ require (
 	google.golang.org/grpc v1.80.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace github.com/lightwebinc/bitcoin-shard-common => ../bitcoin-shard-common
