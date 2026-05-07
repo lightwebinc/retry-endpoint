@@ -210,9 +210,9 @@ Multicast scope for ADVERT datagrams.
 |--------|-------|----------|
 | `site` | `FF05::FF:FFFD` | All listeners on the local site |
 | `global` | `FF0E::FF:FFFD` | Inter-AS via MP-BGP MVPN |
-| `both` | both | Mixed deployments |
+| `both` | both groups | Site + global simultaneously (two ADVERTs per interval) |
 
-Listeners join the beacon group matching their `-beacon-scope`.
+Org scope (`FF08::FF:FFFD`, wire byte `0x08`) is defined in the BRC-126 wire format but `org` is not a supported flag value.
 
 ### `-beacon-flags-multicast` / `BEACON_FLAGS_MULTICAST` (default: `true`)
 
@@ -286,7 +286,7 @@ Metric export interval for the OTLP push exporter. Ignored when
 | `bre_cache_hits_total` | NACK requests resolved from cache |
 | `bre_cache_misses_total` | NACK requests with no cached frame |
 | `bre_retransmits_total` | Frames sent to multicast egress |
-| `bre_retransmit_dedup_total` | Retransmits skipped by Redis dedup |
+| `bre_retransmit_dedup_total` | Retransmits skipped by cross-instance dedup (Redis backend only) |
 | `bre_rate_limit_drops_total{level=ip\|sequence}` | Requests dropped by rate limiter |
 
 ---
