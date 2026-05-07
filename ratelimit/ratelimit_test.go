@@ -129,3 +129,159 @@ func TestSequenceLimiterDefaultWindow(t *testing.T) {
 		t.Fatalf("second request must be sequence-limited; got ok=%v level=%q", ok, level)
 	}
 }
+
+// ── Chain limiter tests ───────────────────────────────────────────────────────
+
+func TestChainRateLimit(t *testing.T) {
+	l := New(Config{
+		IPRate:      1e9,
+		IPBurst:     1_000_000,
+		ChainRate:   2,
+		ChainWindow: time.Minute,
+		SequenceMax: 1_000_000,
+	})
+
+	ip := net.ParseIP("::1")
+	const chainID = uint64(0xdeadbeef00000001)
+
+	// First two calls within window should pass.
+	for i := 0; i < 2; i++ {
+		if !l.AllowChain(ip, chainID) {
+			t.Fatalf("chain call %d should be allowed within window", i)
+		}
+	}
+	// Third call must be blocked.
+	if l.AllowChain(ip, chainID) {
+		t.Error("expected chain rate limit to block request after window exhausted")
+	}
+}
+
+func TestChainRateLimit_DifferentChains_Independent(t *testing.T) {
+	l := New(Config{
+		IPRate:      1e9,
+		IPBurst:     1_000_000,
+		ChainRate:   1,
+		ChainWindow: time.Minute,
+		SequenceMax: 1_000_000,
+	})
+	ip := net.ParseIP("::1")
+
+	// Each distinct chainID gets its own window.
+	for i := uint64(1); i <= 5; i++ {
+		if !l.AllowChain(ip, i) {
+			t.Fatalf("first call for chain %d should be allowed", i)
+		}
+	}
+}
+
+func TestChainIDZeroSkip(t *testing.T) {
+	l := New(Config{
+		IPRate:      1e9,
+		IPBurst:     1_000_000,
+		ChainRate:   1, // extremely tight limit
+		ChainWindow: time.Minute,
+		SequenceMax: 1_000_000,
+	})
+	ip := net.ParseIP("::1")
+	const chainID = uint64(0) // zero = orphan gap, not yet chain-attributed
+
+	// ChainID == 0 must bypass the chain limiter; bucketing all unattributed
+	// gaps together would cause premature rate limiting of distinct orphan gaps.
+	for i := 0; i < 10; i++ {
+		if !l.AllowChain(ip, chainID) {
+			t.Fatalf("call %d with chainID=0 must bypass chain limiter (orphan gap)", i)
+		}
+	}
+}
+
+func TestChainRateLimit_DifferentIPs_Independent(t *testing.T) {
+	l := New(Config{
+		IPRate:      1e9,
+		IPBurst:     1_000_000,
+		ChainRate:   1,
+		ChainWindow: time.Minute,
+		SequenceMax: 1_000_000,
+	})
+	const chainID = uint64(0xaaaa)
+
+	// Exhaust chain limit from ip1.
+	ip1 := net.ParseIP("::1")
+	if !l.AllowChain(ip1, chainID) {
+		t.Fatal("first call ip1 should pass")
+	}
+	if l.AllowChain(ip1, chainID) {
+		t.Fatal("second call ip1 should be rate limited")
+	}
+
+	// ip2 has an independent counter for the same chainID.
+	ip2 := net.ParseIP("::2")
+	if !l.AllowChain(ip2, chainID) {
+		t.Fatal("first call ip2 should be allowed (independent counter)")
+	}
+}
+
+// ── Group limiter tests ───────────────────────────────────────────────────────
+
+func TestGroupRateLimit(t *testing.T) {
+	l := New(Config{
+		IPRate:      1e9,
+		IPBurst:     1_000_000,
+		SequenceMax: 1_000_000,
+		GroupRate:   2,
+		GroupBurst:  2,
+	})
+	ip := net.ParseIP("::1")
+	const groupIdx = uint32(7)
+
+	// Burst of 2 should pass.
+	for i := 0; i < 2; i++ {
+		if !l.AllowGroup(ip, groupIdx) {
+			t.Fatalf("group call %d should be allowed within burst", i)
+		}
+	}
+	// Third call must be blocked (burst exhausted, rate too slow).
+	if l.AllowGroup(ip, groupIdx) {
+		t.Error("expected group rate limit to block request after burst exhausted")
+	}
+}
+
+func TestGroupRateLimit_DifferentGroups_Independent(t *testing.T) {
+	l := New(Config{
+		IPRate:      1e9,
+		IPBurst:     1_000_000,
+		SequenceMax: 1_000_000,
+		GroupRate:   1,
+		GroupBurst:  1,
+	})
+	ip := net.ParseIP("::1")
+
+	// Each distinct groupIdx gets its own bucket.
+	for g := uint32(0); g < 5; g++ {
+		if !l.AllowGroup(ip, g) {
+			t.Fatalf("first call for group %d should be allowed", g)
+		}
+	}
+}
+
+func TestGroupRateLimit_SenderAlias(t *testing.T) {
+	// SenderRate/SenderWindow are backward-compat aliases for ChainRate/ChainWindow.
+	l := New(Config{
+		IPRate:       1e9,
+		IPBurst:      1_000_000,
+		SenderRate:   3,
+		SenderWindow: time.Minute,
+		SequenceMax:  1_000_000,
+	})
+	ip := net.ParseIP("::1")
+	const chainID = uint64(0xbeef)
+
+	// SenderRate=3 → ChainRate=3; three calls should pass.
+	for i := 0; i < 3; i++ {
+		if !l.AllowChain(ip, chainID) {
+			t.Fatalf("call %d should pass (SenderRate aliased as ChainRate=3)", i)
+		}
+	}
+	if l.AllowChain(ip, chainID) {
+		t.Error("fourth call should be blocked")
+	}
+}

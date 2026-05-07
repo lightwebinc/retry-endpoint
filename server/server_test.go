@@ -9,6 +9,7 @@ import (
 
 	"github.com/lightwebinc/bitcoin-retry-endpoint/ratelimit"
 	"github.com/lightwebinc/bitcoin-shard-common/frame"
+	"github.com/lightwebinc/bitcoin-shard-common/shard"
 )
 
 // ── test doubles ─────────────────────────────────────────────────────────────
@@ -82,10 +83,12 @@ func permissiveRL() *ratelimit.Limiter {
 	return ratelimit.New(ratelimit.Config{
 		IPRate:         1e9,
 		IPBurst:        1_000_000,
-		SenderRate:     1e9,
-		SenderWindow:   time.Second,
+		ChainRate:      1e9,
+		ChainWindow:    time.Second,
 		SequenceMax:    1_000_000,
 		SequenceWindow: time.Second,
+		GroupRate:      1e9,
+		GroupBurst:     1_000_000,
 	})
 }
 
@@ -119,13 +122,17 @@ func storeSecondary(c *mockCache, prevSeq, curSeq uint64) {
 }
 
 func buildNACK(msgType byte, lookupType byte, lookupSeq uint64) []byte {
+	return buildNACKWithChain(msgType, lookupType, lookupSeq, 0)
+}
+
+func buildNACKWithChain(msgType byte, lookupType byte, lookupSeq uint64, chainID uint64) []byte {
 	buf := make([]byte, NACKSize)
 	binary.BigEndian.PutUint32(buf[0:4], frame.MagicBSV)
 	binary.BigEndian.PutUint16(buf[4:6], frame.ProtoVer)
 	buf[6] = msgType
 	buf[7] = lookupType
 	binary.BigEndian.PutUint64(buf[8:16], lookupSeq)
-	// buf[16:24] reserved
+	binary.BigEndian.PutUint64(buf[16:24], chainID) // ChainID
 	return buf
 }
 
@@ -352,5 +359,93 @@ func TestProcessNACK_NilSrc_RetransmitsNoResponse(t *testing.T) {
 	}
 	if len(conn.written) != 0 {
 		t.Errorf("no response should be sent when src is nil (no return address), got %d", len(conn.written))
+	}
+}
+
+func TestProcessNACK_GroupLimit_SkipsRetransmit_StillACKs(t *testing.T) {
+	mc := newMockCache()
+	rt := &mockRetransmitter{}
+	conn := &mockPacketConn{}
+
+	const curSeq uint64 = 0xCAFE0001
+	raw := buildCacheFrame(t, curSeq)
+	storePrimary(mc, curSeq, raw)
+
+	// Build a tight group limiter: burst=1, rate=1/s.
+	tightRL := ratelimit.New(ratelimit.Config{
+		IPRate:      1e9,
+		IPBurst:     1_000_000,
+		ChainRate:   1e9,
+		ChainWindow: time.Second,
+		SequenceMax: 1_000_000,
+		GroupRate:   1,
+		GroupBurst:  1,
+	})
+
+	engine := shard.New(0xFF05, [11]byte{}, 2)
+	s := New(9300, mc, tightRL, nil, rt, 1, false)
+	s.SetShardEngine(engine)
+	src := &net.UDPAddr{IP: net.IPv6loopback, Port: 12345}
+
+	// First request consumes the burst of 1 — retransmit fires, ACK sent.
+	s.processNACK(conn, 0, buildNACK(msgTypeNACK, lookupByCurSeq, curSeq), src)
+	if !rt.called {
+		t.Fatal("first request: retransmitter must fire")
+	}
+	if len(conn.written) != 1 || conn.written[0][6] != msgTypeACK {
+		t.Fatalf("first request: expected 1 ACK, got %d responses", len(conn.written))
+	}
+
+	// Reset for second call.
+	rt.called = false
+
+	// Second request: group limiter exhausted — retransmit must be skipped
+	// but ACK must still be sent (frame exists).
+	s.processNACK(conn, 0, buildNACK(msgTypeNACK, lookupByCurSeq, curSeq), src)
+	if rt.called {
+		t.Error("second request: retransmitter must NOT be called when group throttled")
+	}
+	if len(conn.written) != 2 || conn.written[1][6] != msgTypeACK {
+		t.Fatalf("second request: expected ACK even when group throttled, got %d responses", len(conn.written)-1)
+	}
+}
+
+func TestProcessNACK_ChainLimit_DropsRequest(t *testing.T) {
+	mc := newMockCache()
+	rt := &mockRetransmitter{}
+	conn := &mockPacketConn{}
+
+	const curSeq uint64 = 0xCAFE0002
+	const chainID uint64 = 0x1234567890ABCDEF
+	storePrimary(mc, curSeq, buildCacheFrame(t, curSeq))
+
+	// Tight chain limiter: 1 request per minute per (ip, chainID).
+	tightRL := ratelimit.New(ratelimit.Config{
+		IPRate:      1e9,
+		IPBurst:     1_000_000,
+		ChainRate:   1,
+		ChainWindow: time.Minute,
+		SequenceMax: 1_000_000,
+		GroupRate:   1e9,
+		GroupBurst:  1_000_000,
+	})
+
+	s := New(9300, mc, tightRL, nil, rt, 1, false)
+	src := &net.UDPAddr{IP: net.IPv6loopback, Port: 12345}
+
+	// First call with chainID: passes.
+	s.processNACK(conn, 0, buildNACKWithChain(msgTypeNACK, lookupByCurSeq, curSeq, chainID), src)
+	if !rt.called {
+		t.Fatal("first chain request must pass")
+	}
+
+	// Second call: chain limit exhausted → silently dropped.
+	rt.called = false
+	s.processNACK(conn, 0, buildNACKWithChain(msgTypeNACK, lookupByCurSeq, curSeq, chainID), src)
+	if rt.called {
+		t.Error("second chain request must be dropped (chain rate limited)")
+	}
+	if len(conn.written) != 1 {
+		t.Errorf("chain-limited request must produce no additional response; total=%d", len(conn.written))
 	}
 }

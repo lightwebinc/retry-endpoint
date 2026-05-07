@@ -1,11 +1,16 @@
-// Package ratelimit provides two-level rate limiting for NACK requests:
-// per-IP token bucket and per-LookupSeq sliding window.
+// Package ratelimit provides four-tier rate limiting for NACK requests:
 //
-// BRC-124 removed SenderID and SequenceID (uint32) from the wire format;
-// the only NACK-level identifier is LookupSeq (uint64 XXH64 hash).
+//  1. Per-IP token bucket (overall flood protection).
+//  2. Per-(srcIP, chainID) sliding window (per-flow NACK storm cap).
+//  3. Per-LookupSeq sliding window (per-gap retry cap).
+//  4. Per-(srcIP, groupIdx) token bucket (post-lookup retransmit bandwidth cap).
+//
+// Tiers 1-3 are pre-lookup (call Allow + AllowChain before cache access).
+// Tier 4 is post-lookup (call AllowGroup after cache hit, before Retransmit).
 package ratelimit
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -13,49 +18,78 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Level represents the rate limiting level.
+// Level represents the rate limiting tier that rejected a request.
 type Level string
 
 const (
 	LevelIP       Level = "ip"
+	LevelChain    Level = "chain"
 	LevelSequence Level = "sequence"
+	LevelGroup    Level = "group"
 )
 
-// Limiter provides two-level rate limiting.
+// Limiter provides four-tier rate limiting.
 type Limiter struct {
-	ipLimiter       *ipLimiter
+	ipLimiter       *tokenBucketLimiter
+	chainLimiter    *slidingWindowLimiter
 	sequenceLimiter *sequenceLimiter
+	groupLimiter    *tokenBucketLimiter
 }
 
 // Config holds rate limiting configuration.
 type Config struct {
-	IPRate         float64       // Tokens per second
-	IPBurst        int           // Burst size
-	SenderRate     float64       // Requests per window
-	SenderWindow   time.Duration // Sliding window duration
-	SequenceMax    int           // Max requests per SequenceID per SequenceWindow
-	SequenceWindow time.Duration // Sliding window duration for SequenceID limiter
+	IPRate         float64       // Tokens per second per source IP
+	IPBurst        int           // Burst size per source IP
+	SenderRate     float64       // Alias for ChainRate (backward-compat)
+	SenderWindow   time.Duration // Alias for ChainWindow (backward-compat)
+	ChainRate      float64       // Max NACKs per ChainWindow per (srcIP, chainID)
+	ChainWindow    time.Duration // Sliding window for chain limiter
+	SequenceMax    int           // Max requests per LookupSeq per SequenceWindow
+	SequenceWindow time.Duration // Sliding window for sequence limiter
+	GroupRate      float64       // Retransmits per second per (srcIP, groupIdx)
+	GroupBurst     int           // Burst size per (srcIP, groupIdx)
 }
 
-// New constructs a new rate limiter.
+// New constructs a new Limiter.
 func New(cfg Config) *Limiter {
 	if cfg.SequenceWindow <= 0 {
-		// Default to 1 minute if unset — matches SenderWindow default and
-		// prevents the legacy "counter never resets" behaviour.
 		cfg.SequenceWindow = time.Minute
 	}
+	// SenderRate/SenderWindow are aliases for ChainRate/ChainWindow.
+	if cfg.ChainRate == 0 && cfg.SenderRate != 0 {
+		cfg.ChainRate = cfg.SenderRate
+	}
+	if cfg.ChainWindow <= 0 && cfg.SenderWindow > 0 {
+		cfg.ChainWindow = cfg.SenderWindow
+	}
+	if cfg.ChainWindow <= 0 {
+		cfg.ChainWindow = time.Minute
+	}
+	chainMax := int(cfg.ChainRate)
+	if chainMax <= 0 {
+		chainMax = 500
+	}
+	groupRate := cfg.GroupRate
+	if groupRate <= 0 {
+		groupRate = 200
+	}
+	groupBurst := cfg.GroupBurst
+	if groupBurst <= 0 {
+		groupBurst = 50
+	}
 	return &Limiter{
-		ipLimiter:       newIPLimiter(cfg.IPRate, cfg.IPBurst),
+		ipLimiter:       newTokenBucketLimiter(cfg.IPRate, cfg.IPBurst),
+		chainLimiter:    newSlidingWindowLimiter(chainMax, cfg.ChainWindow),
 		sequenceLimiter: newSequenceLimiter(cfg.SequenceMax, cfg.SequenceWindow),
+		groupLimiter:    newTokenBucketLimiter(groupRate, groupBurst),
 	}
 }
 
-// Allow checks if the NACK request should be allowed.
-// srcIP is the listener source address; lookupSeq is the LookupSeq field from
-// the NACK datagram (CurSeq or PrevSeq hash, BRC-124).
-// Returns (true, "") if allowed, (false, level) if rate limited.
+// Allow checks the IP and sequence tiers (pre-lookup).
+// srcIP is the listener source address; lookupSeq is the LookupSeq field
+// from the NACK datagram. Returns (true, "") if allowed.
 func (r *Limiter) Allow(srcIP net.IP, lookupSeq uint64) (bool, Level) {
-	if !r.ipLimiter.Allow(srcIP) {
+	if !r.ipLimiter.Allow(srcIP.String()) {
 		return false, LevelIP
 	}
 	if !r.sequenceLimiter.Allow(lookupSeq) {
@@ -64,33 +98,105 @@ func (r *Limiter) Allow(srcIP net.IP, lookupSeq uint64) (bool, Level) {
 	return true, ""
 }
 
-// ipLimiter provides token bucket rate limiting per source IP.
-type ipLimiter struct {
+// AllowChain checks the chain tier (pre-lookup, between IP and sequence).
+// chainID is the ChainID field from the NACK datagram. 0 means the gap has
+// not yet been attributed to a specific hash chain (orphan gap); rate-limiting
+// on ChainID=0 would bucket all such unattributed gaps together and prematurely
+// exhaust a shared limit, so the check is skipped.
+func (r *Limiter) AllowChain(srcIP net.IP, chainID uint64) bool {
+	if chainID == 0 {
+		return true
+	}
+	key := fmt.Sprintf("%s:%016x", srcIP.String(), chainID)
+	return r.chainLimiter.Allow(key)
+}
+
+// AllowGroup checks the group tier (post-lookup, before Retransmit).
+// groupIdx is derived from the frame's TxID. Returns true if the retransmit
+// should proceed; false means throttle the retransmit (but still send ACK).
+func (r *Limiter) AllowGroup(srcIP net.IP, groupIdx uint32) bool {
+	key := fmt.Sprintf("%s:%d", srcIP.String(), groupIdx)
+	return r.groupLimiter.Allow(key)
+}
+
+// ── token bucket (per string key) ─────────────────────────────────────────────
+
+type tokenBucketLimiter struct {
 	mu    sync.Mutex
 	limit map[string]*rate.Limiter
-	rate  rate.Limit
+	r     rate.Limit
 	burst int
 }
 
-func newIPLimiter(tokensPerSec float64, burst int) *ipLimiter {
-	return &ipLimiter{
+func newTokenBucketLimiter(tokensPerSec float64, burst int) *tokenBucketLimiter {
+	return &tokenBucketLimiter{
 		limit: make(map[string]*rate.Limiter),
-		rate:  rate.Limit(tokensPerSec),
+		r:     rate.Limit(tokensPerSec),
 		burst: burst,
 	}
 }
 
-func (r *ipLimiter) Allow(ip net.IP) bool {
-	key := ip.String()
-	r.mu.Lock()
-	limiter, ok := r.limit[key]
+func (t *tokenBucketLimiter) Allow(key string) bool {
+	t.mu.Lock()
+	l, ok := t.limit[key]
 	if !ok {
-		limiter = rate.NewLimiter(r.rate, r.burst)
-		r.limit[key] = limiter
+		l = rate.NewLimiter(t.r, t.burst)
+		t.limit[key] = l
 	}
-	r.mu.Unlock()
-	return limiter.Allow()
+	t.mu.Unlock()
+	return l.Allow()
 }
+
+// ── sliding window (per string key) ───────────────────────────────────────────
+
+type slidingWindowLimiter struct {
+	mu     sync.Mutex
+	keys   map[string]*windowEntry
+	max    int
+	window time.Duration
+}
+
+type windowEntry struct {
+	timestamps []time.Time
+}
+
+func newSlidingWindowLimiter(max int, window time.Duration) *slidingWindowLimiter {
+	return &slidingWindowLimiter{
+		keys:   make(map[string]*windowEntry),
+		max:    max,
+		window: window,
+	}
+}
+
+func (r *slidingWindowLimiter) Allow(key string) bool {
+	now := time.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entry, ok := r.keys[key]
+	if !ok {
+		entry = &windowEntry{timestamps: make([]time.Time, 0, r.max)}
+		r.keys[key] = entry
+	}
+
+	cutoff := now.Add(-r.window)
+	validIdx := 0
+	for _, ts := range entry.timestamps {
+		if ts.After(cutoff) {
+			entry.timestamps[validIdx] = ts
+			validIdx++
+		}
+	}
+	entry.timestamps = entry.timestamps[:validIdx]
+
+	if len(entry.timestamps) >= r.max {
+		return false
+	}
+	entry.timestamps = append(entry.timestamps, now)
+	return true
+}
+
+// ── sliding window (per uint64 key, for LookupSeq) ────────────────────────────
 
 // sequenceLimiter provides sliding-window rate limiting per LookupSeq (uint64).
 //
@@ -102,18 +208,14 @@ func (r *ipLimiter) Allow(ip net.IP) bool {
 // at full capacity.
 type sequenceLimiter struct {
 	mu     sync.Mutex
-	seqs   map[uint64]*sequenceEntry
+	seqs   map[uint64]*windowEntry
 	max    int
 	window time.Duration
 }
 
-type sequenceEntry struct {
-	timestamps []time.Time
-}
-
 func newSequenceLimiter(max int, window time.Duration) *sequenceLimiter {
 	return &sequenceLimiter{
-		seqs:   make(map[uint64]*sequenceEntry),
+		seqs:   make(map[uint64]*windowEntry),
 		max:    max,
 		window: window,
 	}
@@ -126,12 +228,10 @@ func (r *sequenceLimiter) Allow(lookupSeq uint64) bool {
 
 	entry, ok := r.seqs[lookupSeq]
 	if !ok {
-		entry = &sequenceEntry{timestamps: make([]time.Time, 0, r.max)}
+		entry = &windowEntry{timestamps: make([]time.Time, 0, r.max)}
 		r.seqs[lookupSeq] = entry
 	}
 
-	// Drop timestamps outside the window. Expected working set is small
-	// because the window is short relative to typical flow bursts.
 	cutoff := now.Add(-r.window)
 	validIdx := 0
 	for _, ts := range entry.timestamps {

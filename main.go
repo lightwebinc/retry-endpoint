@@ -159,8 +159,12 @@ func run() error {
 		IPBurst:        cfg.RLIPBurst,
 		SenderRate:     cfg.RLSenderRate,
 		SenderWindow:   cfg.RLSenderWindow,
+		ChainRate:      cfg.RLChainRate,
+		ChainWindow:    cfg.RLChainWindow,
 		SequenceMax:    cfg.RLSequenceMax,
 		SequenceWindow: cfg.RLSequenceWindow,
+		GroupRate:      cfg.RLGroupRate,
+		GroupBurst:     cfg.RLGroupBurst,
 	})
 
 	// Build retransmitter.
@@ -183,6 +187,7 @@ func run() error {
 	srv.SetBindAddr(nackBindIP.String())
 	srv.SetSuppressACK(cfg.SuppressACK)
 	srv.SetSuppressMISS(cfg.SuppressMISS)
+	srv.SetShardEngine(engine)
 
 	// Build ingress worker.
 	ing := ingress.New(mcIface, cfg.ListenPort, groups, c, rec, cfg.CacheTTL, cfg.Debug)

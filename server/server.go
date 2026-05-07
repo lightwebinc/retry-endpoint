@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lightwebinc/bitcoin-shard-common/frame"
+	"github.com/lightwebinc/bitcoin-shard-common/shard"
 
 	"github.com/lightwebinc/bitcoin-retry-endpoint/cache"
 	"github.com/lightwebinc/bitcoin-retry-endpoint/metrics"
@@ -45,8 +46,9 @@ type Server struct {
 	retransmit   Retransmitter
 	workers      int
 	debug        bool
-	suppressACK  bool // if true, do not send ACK responses
-	suppressMISS bool // if true, do not send MISS responses
+	suppressACK  bool          // if true, do not send ACK responses
+	suppressMISS bool          // if true, do not send MISS responses
+	shardEngine  *shard.Engine // for post-lookup group index derivation; nil = skip group limiter
 	log          *slog.Logger
 }
 
@@ -88,6 +90,10 @@ func (s *Server) SetSuppressMISS(v bool) { s.suppressMISS = v }
 // kernel source-address selection (which may pick a SLAAC-derived address
 // that does not match what listeners expect).
 func (s *Server) SetBindAddr(addr string) { s.bindAddr = addr }
+
+// SetShardEngine wires the shard engine used to derive groupIdx from TxID
+// for the post-lookup group rate limiter. Must be called before Run.
+func (s *Server) SetShardEngine(e *shard.Engine) { s.shardEngine = e }
 
 // Run starts the UDP server with a worker pool.
 func (s *Server) Run(ctx context.Context) error {
@@ -197,8 +203,9 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 
 	lookupType := datagram[7]
 	lookupSeq := binary.BigEndian.Uint64(datagram[8:16])
+	chainID := binary.BigEndian.Uint64(datagram[16:24])
 
-	// Rate limiting (IP level).
+	// Rate limiting: tier 1 (IP) + tier 3 (sequence), pre-lookup.
 	var srcIP net.IP
 	if src != nil {
 		srcIP = src.IP
@@ -212,6 +219,17 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		}
 		if s.debug {
 			s.log.Debug("rate limited", "level", level)
+		}
+		return
+	}
+
+	// Rate limiting: tier 2 (chain), pre-lookup.
+	if !s.rateLimiter.AllowChain(srcIP, chainID) {
+		if s.rec != nil {
+			s.rec.RateLimitDrop(string(ratelimit.LevelChain))
+		}
+		if s.debug {
+			s.log.Debug("rate limited", "level", ratelimit.LevelChain, "chain_id", chainID)
 		}
 		return
 	}
@@ -292,13 +310,31 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		copy(txID[:], raw[8:40])
 	}
 
-	if err := s.retransmit.Retransmit(raw, txID); err != nil {
-		s.log.Error("retransmit error", "err", err)
-		return
+	// Rate limiting: tier 4 (group), post-lookup.
+	// On throttle: skip retransmit but still send ACK (frame exists; listener
+	// must not escalate to the next endpoint on an honest ACK).
+	groupThrottled := false
+	if s.shardEngine != nil {
+		groupIdx := s.shardEngine.GroupIndex(&txID)
+		if !s.rateLimiter.AllowGroup(srcIP, groupIdx) {
+			groupThrottled = true
+			if s.rec != nil {
+				s.rec.RateLimitDrop(string(ratelimit.LevelGroup))
+			}
+			if s.debug {
+				s.log.Debug("rate limited", "level", ratelimit.LevelGroup, "group_idx", groupIdx)
+			}
+		}
 	}
 
-	if s.rec != nil {
-		s.rec.Retransmit()
+	if !groupThrottled {
+		if err := s.retransmit.Retransmit(raw, txID); err != nil {
+			s.log.Error("retransmit error", "err", err)
+			return
+		}
+		if s.rec != nil {
+			s.rec.Retransmit()
+		}
 	}
 
 	if !s.suppressACK && src != nil {

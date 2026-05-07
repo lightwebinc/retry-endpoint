@@ -54,10 +54,14 @@ type Config struct {
 	// Rate limiting
 	RLIPRate         float64       // IP rate limit (tokens per second)
 	RLIPBurst        int           // IP burst size
-	RLSenderRate     float64       // Deprecated: SenderID removed from BRC-124 NACK wire format; accepted for backwards-compat but ignored by ratelimit.Limiter.
-	RLSenderWindow   time.Duration // Deprecated: see RLSenderRate.
+	RLSenderRate     float64       // Alias for RLChainRate (backward-compat)
+	RLSenderWindow   time.Duration // Alias for RLChainWindow (backward-compat)
+	RLChainRate      float64       // Max NACKs per window per (srcIP, chainID)
+	RLChainWindow    time.Duration // Sliding window for per-chain limiter
 	RLSequenceMax    int           // Max requests per SequenceID per SequenceWindow
 	RLSequenceWindow time.Duration // SequenceID sliding window duration
+	RLGroupRate      float64       // Retransmits per second per (srcIP, groupIdx)
+	RLGroupBurst     int           // Burst size per (srcIP, groupIdx)
 
 	// Runtime
 	NumWorkers   int           // Worker goroutines for multicast ingress (always 1)
@@ -123,14 +127,22 @@ func Load() (*Config, error) {
 		"IP rate limit (tokens per second)")
 	flag.IntVar(&c.RLIPBurst, "rl-ip-burst", envInt("RL_IP_BURST", 10),
 		"IP rate limit burst size")
-	flag.Float64Var(&c.RLSenderRate, "rl-sender-rate", envFloat("RL_SENDER_RATE", 50),
-		"[deprecated no-op] SenderID was removed from the BRC-124 NACK wire format")
-	flag.DurationVar(&c.RLSenderWindow, "rl-sender-window", envDuration("RL_SENDER_WINDOW", time.Minute),
-		"[deprecated no-op] SenderID was removed from the BRC-124 NACK wire format")
+	flag.Float64Var(&c.RLSenderRate, "rl-sender-rate", envFloat("RL_SENDER_RATE", 0),
+		"alias for rl-chain-rate (backward-compat)")
+	flag.DurationVar(&c.RLSenderWindow, "rl-sender-window", envDuration("RL_SENDER_WINDOW", 0),
+		"alias for rl-chain-window (backward-compat)")
+	flag.Float64Var(&c.RLChainRate, "rl-chain-rate", envFloat("RL_CHAIN_RATE", 500),
+		"max NACKs per window per (srcIP, chainID)")
+	flag.DurationVar(&c.RLChainWindow, "rl-chain-window", envDuration("RL_CHAIN_WINDOW", time.Minute),
+		"sliding window for per-chain NACK limiter")
 	flag.IntVar(&c.RLSequenceMax, "rl-sequence-max", envInt("RL_SEQUENCE_MAX", 100),
 		"max requests per SequenceID per sliding window")
 	flag.DurationVar(&c.RLSequenceWindow, "rl-sequence-window", envDuration("RL_SEQUENCE_WINDOW", time.Minute),
 		"SequenceID sliding window duration")
+	flag.Float64Var(&c.RLGroupRate, "rl-group-rate", envFloat("RL_GROUP_RATE", 200),
+		"retransmits per second per (srcIP, groupIdx)")
+	flag.IntVar(&c.RLGroupBurst, "rl-group-burst", envInt("RL_GROUP_BURST", 50),
+		"burst size per (srcIP, groupIdx) for group retransmit limiter")
 
 	flag.StringVar(&c.MCScope, "scope", envStr("MC_SCOPE", "site"),
 		"multicast scope: link | site | org | global")
