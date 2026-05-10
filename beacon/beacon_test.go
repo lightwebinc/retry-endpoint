@@ -149,13 +149,42 @@ func TestBeaconGroups_globalOnly(t *testing.T) {
 	}
 }
 
+func TestBeaconGroups_orgOnly(t *testing.T) {
+	cfg := testConfig()
+	cfg.Scope = 0x08
+	s := New(cfg)
+	groups := s.beaconGroups()
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	if groups[0].IP[1] != 0x08 {
+		t.Errorf("expected FF08 scope, got %02X%02X", groups[0].IP[0], groups[0].IP[1])
+	}
+}
+
 func TestBeaconGroups_both(t *testing.T) {
 	cfg := testConfig()
 	cfg.Scope = 0xFF
 	s := New(cfg)
 	groups := s.beaconGroups()
-	if len(groups) != 2 {
-		t.Fatalf("expected 2 groups, got %d", len(groups))
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 groups, got %d", len(groups))
+	}
+}
+
+func TestBeaconGroups_all(t *testing.T) {
+	cfg := testConfig()
+	cfg.Scope = 0xFF
+	s := New(cfg)
+	groups := s.beaconGroups()
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 groups (site+org+global), got %d", len(groups))
+	}
+	scopes := []byte{groups[0].IP[1], groups[1].IP[1], groups[2].IP[1]}
+	for i, want := range []byte{0x05, 0x08, 0x0E} {
+		if scopes[i] != want {
+			t.Errorf("group[%d]: expected scope byte FF%02X, got FF%02X", i, want, scopes[i])
+		}
 	}
 }
 

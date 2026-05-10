@@ -79,8 +79,8 @@ type Config struct {
 	BeaconTier           uint          // 0 = closest to source
 	BeaconPreference     uint          // weighting within tier; higher = preferred
 	BeaconInterval       time.Duration // ADVERT cadence
-	BeaconScope          string        // "site" | "global" | "both"
-	BeaconScopeByte      byte          // derived: 0x05 | 0x0E | 0xFF
+	BeaconScope          string        // "site" | "org" | "global" | "both" | "all"
+	BeaconScopeByte      byte          // derived: 0x05 | 0x08 | 0x0E | 0xFF
 	BeaconFlagsUnicast   bool
 	BeaconFlagsMulticast bool
 	BeaconFlagsDraining  bool
@@ -177,7 +177,7 @@ func Load() (*Config, error) {
 	flag.DurationVar(&c.BeaconInterval, "beacon-interval", envDuration("BEACON_INTERVAL", 60*time.Second),
 		"beacon multicast interval")
 	flag.StringVar(&c.BeaconScope, "beacon-scope", envStr("BEACON_SCOPE", "site"),
-		"beacon scope: site | global | both")
+		"beacon scope: link | site | org | global | both | all")
 	flag.BoolVar(&c.BeaconFlagsUnicast, "beacon-flags-unicast", envBool("BEACON_FLAGS_UNICAST", false),
 		"advertise unicast retransmit support")
 	flag.BoolVar(&c.BeaconFlagsMulticast, "beacon-flags-multicast", envBool("BEACON_FLAGS_MULTICAST", true),
@@ -265,12 +265,14 @@ func Load() (*Config, error) {
 	switch c.BeaconScope {
 	case "site":
 		c.BeaconScopeByte = 0x05
+	case "org":
+		c.BeaconScopeByte = 0x08
 	case "global":
 		c.BeaconScopeByte = 0x0E
-	case "both":
+	case "both", "all":
 		c.BeaconScopeByte = 0xFF
 	default:
-		return nil, fmt.Errorf("beacon-scope must be one of site|global|both, got %q", c.BeaconScope)
+		return nil, fmt.Errorf("beacon-scope must be one of link|site|org|global|both|all, got %q", c.BeaconScope)
 	}
 	if c.BeaconTier > 255 {
 		return nil, fmt.Errorf("beacon-tier must fit in uint8, got %d", c.BeaconTier)

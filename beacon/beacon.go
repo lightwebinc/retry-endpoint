@@ -36,7 +36,7 @@ type Config struct {
 	Tier        uint8          // 0 = closest to source
 	Preference  uint8          // weighting within tier; higher = more preferred
 	Interval    time.Duration  // beacon interval (default 60s)
-	Scope       byte           // 0x05=site, 0x0E=global, 0xFF=both
+	Scope       byte           // 0x05=site, 0x08=org, 0x0E=global, 0xFF=all
 	Flags       uint16         // ADVERT flags (see constants above)
 	InstanceID  uint32         // unique instance identifier
 	MiddleBytes [11]byte       // bytes 2-12 of the multicast prefix
@@ -164,6 +164,10 @@ func (s *Sender) beaconGroups() []*net.UDPAddr {
 
 	if s.cfg.Scope == 0x05 || s.cfg.Scope == 0xFF {
 		ip := shard.ControlGroupAddr(0xFF05, s.cfg.MiddleBytes, shard.CtrlGroupBeacon)
+		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
+	}
+	if s.cfg.Scope == 0x08 || s.cfg.Scope == 0xFF {
+		ip := shard.ControlGroupAddr(0xFF08, s.cfg.MiddleBytes, shard.CtrlGroupBeacon)
 		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
 	}
 	if s.cfg.Scope == 0x0E || s.cfg.Scope == 0xFF {
