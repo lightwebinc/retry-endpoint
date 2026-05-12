@@ -95,7 +95,7 @@ Offset  Size  Field        Value / notes
      4     2  ProtoVer     0x02BF
      6     1  MsgType      0x12 = ACK; 0x11 = MISS
      7     1  Flags        0x01 on ACK; 0x00 on MISS
-     8     8  CurSeq       uint64 BE; CurSeq of the resolved frame (ACK) or echo of LookupSeq (MISS)
+     8     8  CurSeq       uint64 BE; CurSeq of the resolved frame (ACK) or 0 (MISS)
 ```
 
 ### NACK bind address
