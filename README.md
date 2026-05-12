@@ -20,7 +20,7 @@ bitcoin-shard-proxy ──multicast──▶ FF05::<shard>:9001
                bitcoin-shard-listener  bitcoin-retry-endpoint
                (gap detected → NACK) ──UDP──▶ [nack-addr]:9300
                           │                   │
-                          ◀── ACK / MISS ──────┘
+                          ◀── ACK / MISS ─────┘
 ```
 
 ## Documentation
