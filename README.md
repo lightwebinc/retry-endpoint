@@ -1,6 +1,11 @@
 # bitcoin-retry-endpoint
 
 [![CI](https://github.com/lightwebinc/bitcoin-retry-endpoint/actions/workflows/ci.yml/badge.svg)](https://github.com/lightwebinc/bitcoin-retry-endpoint/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/lightwebinc/bitcoin-retry-endpoint/actions/workflows/codeql.yml/badge.svg)](https://github.com/lightwebinc/bitcoin-retry-endpoint/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/lightwebinc/bitcoin-retry-endpoint)](https://github.com/lightwebinc/bitcoin-retry-endpoint/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/lightwebinc/bitcoin-retry-endpoint.svg)](https://pkg.go.dev/github.com/lightwebinc/bitcoin-retry-endpoint)
+[![Go Report Card](https://goreportcard.com/badge/github.com/lightwebinc/bitcoin-retry-endpoint)](https://goreportcard.com/report/github.com/lightwebinc/bitcoin-retry-endpoint)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 Caching endpoint for NACK-based retransmission in the BSV multicast pipeline.
 Receives BRC-124 frames from the multicast fabric, caches them, and retransmits
