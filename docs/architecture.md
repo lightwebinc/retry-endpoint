@@ -46,12 +46,13 @@ UDP only.)
 
 Two backends are supported:
 
-| Backend | Storage | Dedup | Notes |
-|---------|---------|-------|-------|
-| `memory` | In-process freecache (60 s TTL by default) | None | Single-node; cache lost on restart |
-| `redis` | External Redis (`bre:frame:<key>`) | Cross-instance SET NX | Shared across all endpoints; survives restart |
+| Backend  | Storage                                    | Dedup                 | Notes                                         |
+| -------- | ------------------------------------------ | --------------------- | --------------------------------------------- |
+| `memory` | In-process freecache (60 s TTL by default) | None                  | Single-node; cache lost on restart            |
+| `redis`  | External Redis (`bre:frame:<key>`)         | Cross-instance SET NX | Shared across all endpoints; survives restart |
 
 Cache keys use a dual-index scheme:
+
 - `0x01 ∥ CurSeq` (8 B) → raw frame bytes (primary)
 - `0x00 ∥ PrevSeq` (8 B) → CurSeq pointer (8 B) (secondary)
 
@@ -75,28 +76,24 @@ gap fill) even when the listener only knows the previous frame's `CurSeq`.
 
 ### NACK wire format (BRC-126) — 24 bytes
 
-```text
-Offset  Size  Field        Value / notes
-------  ----  -----        -------------
-     0     4  Magic        0xE3E1F3E8
-     4     2  ProtoVer     0x02BF
-     6     1  MsgType      0x10 (NACK)
-     7     1  LookupType   0x00 = by PrevSeq; 0x01 = by CurSeq
-     8     8  LookupSeq    uint64 BE; the XXH64 hash to look up
-    16     8  ChainID      uint64 BE; initial CurSeq of the chain; 0 = orphan gap
-```
+| Offset | Size | Field      | Value / notes                                          |
+| ------ | ---- | ---------- | ------------------------------------------------------ |
+| 0      | 4    | Magic      | 0xE3E1F3E8                                             |
+| 4      | 2    | ProtoVer   | 0x02BF                                                 |
+| 6      | 1    | MsgType    | 0x10 (NACK)                                            |
+| 7      | 1    | LookupType | 0x00 = by PrevSeq; 0x01 = by CurSeq                    |
+| 8      | 8    | LookupSeq  | uint64 BE; the XXH64 hash to look up                   |
+| 16     | 8    | ChainID    | uint64 BE; initial CurSeq of the chain; 0 = orphan gap |
 
 ### ACK/MISS wire format — 16 bytes
 
-```text
-Offset  Size  Field        Value / notes
-------  ----  -----        -------------
-     0     4  Magic        0xE3E1F3E8
-     4     2  ProtoVer     0x02BF
-     6     1  MsgType      0x12 = ACK; 0x11 = MISS
-     7     1  Flags        0x01 on ACK; 0x00 on MISS
-     8     8  CurSeq       uint64 BE; CurSeq of the resolved frame (ACK) or 0 (MISS)
-```
+| Offset | Size | Field    | Value / notes                                             |
+| ------ | ---- | -------- | --------------------------------------------------------- |
+| 0      | 4    | Magic    | 0xE3E1F3E8                                                |
+| 4      | 2    | ProtoVer | 0x02BF                                                    |
+| 6      | 1    | MsgType  | 0x12 = ACK; 0x11 = MISS                                   |
+| 7      | 1    | Flags    | 0x01 on ACK; 0x00 on MISS                                 |
+| 8      | 8    | CurSeq   | uint64 BE; CurSeq of the resolved frame (ACK) or 0 (MISS) |
 
 ### NACK bind address
 
@@ -115,10 +112,10 @@ responses are always sourced from the address advertised in the ADVERT beacon.
 The endpoint supports two retransmit modes, which can be enabled independently or
 together via the ADVERT beacon flags:
 
-| Mode | Beacon flag | Config flag | Behaviour |
-|------|-------------|-------------|----------|
+| Mode      | Beacon flag               | Config flag                                | Behaviour                                                          |
+| --------- | ------------------------- | ------------------------------------------ | ------------------------------------------------------------------ |
 | Multicast | `FlagMulticastRetransmit` | `-beacon-flags-multicast` (default `true`) | Frame sent to `FF05::<shard>:egress-port` on each egress interface |
-| Unicast | `FlagUnicastRetransmit` | `-beacon-flags-unicast` (default `false`) | Frame sent directly back to the NACK sender's address |
+| Unicast   | `FlagUnicastRetransmit`   | `-beacon-flags-unicast` (default `false`)  | Frame sent directly back to the NACK sender's address              |
 
 ### Multicast retransmit
 
@@ -157,11 +154,11 @@ The beacon sender runs as a separate goroutine and fires every `beacon-interval`
 (default 60 s). It sends a 56-byte ADVERT datagram to the configured beacon
 multicast group:
 
-| `-beacon-scope` | Group | Purpose |
-|-----------------|-------|---------|
-| `site` | `FF05::FF:FFFD` | Intra-site listener discovery |
-| `global` | `FF0E::FF:FFFD` | Inter-AS discovery via MP-BGP MVPN |
-| `both` | both | Mixed deployments |
+| `-beacon-scope` | Group           | Purpose                            |
+| --------------- | --------------- | ---------------------------------- |
+| `site`          | `FF05::FF:FFFD` | Intra-site listener discovery      |
+| `global`        | `FF0E::FF:FFFD` | Inter-AS discovery via MP-BGP MVPN |
+| `both`          | both            | Mixed deployments                  |
 
 The ADVERT carries the endpoint's NACKAddr, NACKPort, Tier, Preference, Flags,
 and a stable InstanceID (CRC32c hash of the hostname). Listeners upsert endpoints
@@ -178,12 +175,12 @@ Four tiers applied in order. Pre-lookup tiers drop silently (no response sent).
 The post-lookup group tier skips the retransmit but still sends ACK — the
 listener must not escalate when the frame is available.
 
-| # | Level | Algorithm | Position | Config flags |
-|---|-------|-----------|----------|--------------|
-| 1 | Per source IP | Token bucket | Pre-lookup | `-rl-ip-rate`, `-rl-ip-burst` |
-| 2 | Per (srcIP, ChainID) | Sliding window | Pre-lookup | `-rl-chain-rate`, `-rl-chain-window` |
-| 3 | Per `LookupSeq` | Sliding window | Pre-lookup | `-rl-sequence-max`, `-rl-sequence-window` |
-| 4 | Per (srcIP, groupIdx) | Token bucket | Post-lookup | `-rl-group-rate`, `-rl-group-burst` |
+| #   | Level                 | Algorithm      | Position    | Config flags                              |
+| --- | --------------------- | -------------- | ----------- | ----------------------------------------- |
+| 1   | Per source IP         | Token bucket   | Pre-lookup  | `-rl-ip-rate`, `-rl-ip-burst`             |
+| 2   | Per (srcIP, ChainID)  | Sliding window | Pre-lookup  | `-rl-chain-rate`, `-rl-chain-window`      |
+| 3   | Per `LookupSeq`       | Sliding window | Pre-lookup  | `-rl-sequence-max`, `-rl-sequence-window` |
+| 4   | Per (srcIP, groupIdx) | Token bucket   | Post-lookup | `-rl-group-rate`, `-rl-group-burst`       |
 
 `ChainID=0` (orphan/unattributed gap) bypasses tier 2 to avoid bucketing all
 unattributed gaps from the same source together.
