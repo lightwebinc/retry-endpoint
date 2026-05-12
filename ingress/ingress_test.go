@@ -34,7 +34,7 @@ func (m *mockCache) Store(key, value []byte, ttl time.Duration) error {
 
 func (m *mockCache) Retrieve([]byte) ([]byte, error) { return nil, nil }
 func (m *mockCache) Delete([]byte) error             { return nil }
-func (m *mockCache) Close() error                     { return nil }
+func (m *mockCache) Close() error                    { return nil }
 
 func (m *mockCache) storeCount() int {
 	m.mu.Lock()
