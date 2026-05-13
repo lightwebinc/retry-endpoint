@@ -7,7 +7,7 @@ import (
 
 func TestLen(t *testing.T) {
 	c := New(0)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if c.Len() != 0 {
 		t.Errorf("empty: %d", c.Len())
 	}
@@ -24,7 +24,7 @@ func TestLen(t *testing.T) {
 
 func TestSweepExpired(t *testing.T) {
 	c := New(0)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	_ = c.Store([]byte("short"), []byte("1"), 10*time.Millisecond)
 	_ = c.Store([]byte("long"), []byte("2"), time.Hour)
 	time.Sleep(50 * time.Millisecond)
@@ -42,7 +42,7 @@ func TestSweepExpired(t *testing.T) {
 
 func TestEvictionOnMaxKeys(t *testing.T) {
 	c := New(2)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	_ = c.Store([]byte("a"), []byte("1"), time.Minute)
 	_ = c.Store([]byte("b"), []byte("2"), time.Minute)
 	if c.Len() != 2 {

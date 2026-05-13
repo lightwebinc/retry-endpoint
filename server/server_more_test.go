@@ -107,7 +107,7 @@ func TestRun_StartStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	c.SetReadDeadline(time.Now().Add(time.Second))
+	_ = c.SetReadDeadline(time.Now().Add(time.Second))
 	_, _ = c.Write(buildNACK(msgTypeNACK, lookupByCurSeq, curSeq))
 
 	// Read ACK response.
@@ -145,7 +145,7 @@ func TestRun_BindFailure(t *testing.T) {
 		t.Skipf("udp6 unavailable: %v", err)
 	}
 	port := probe.LocalAddr().(*net.UDPAddr).Port
-	defer probe.Close()
+	defer func() { _ = probe.Close() }()
 
 	s := New(port, newMockCache(), permissiveRL(), nil, &mockRetransmitter{}, 1, false)
 	s.SetBindAddr("::1")

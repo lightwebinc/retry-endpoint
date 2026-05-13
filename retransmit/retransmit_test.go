@@ -66,7 +66,7 @@ func TestRetransmit_DedupSuppresses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	eng := shard.New(0xFF05, [11]byte{}, 2)
 	r := New(eng, nil, 9001, time.Minute, rc, nil, false)
