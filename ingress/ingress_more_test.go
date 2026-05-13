@@ -11,9 +11,6 @@ import (
 func TestNew_Construction(t *testing.T) {
 	mc := &mockCache{}
 	w := New(&net.Interface{Index: 1, Name: "lo"}, 9001, nil, mc, nil, 30*time.Second, true)
-	if w == nil {
-		t.Fatal("nil")
-	}
 	if w.port != 9001 {
 		t.Errorf("port=%d", w.port)
 	}

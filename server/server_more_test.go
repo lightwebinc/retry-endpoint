@@ -106,7 +106,7 @@ func TestRun_StartStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	_ = c.SetReadDeadline(time.Now().Add(time.Second))
 	_, _ = c.Write(buildNACK(msgTypeNACK, lookupByCurSeq, curSeq))
 

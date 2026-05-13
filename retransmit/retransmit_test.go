@@ -15,9 +15,6 @@ import (
 func TestNew(t *testing.T) {
 	eng := shard.New(0xFF05, [11]byte{}, 2)
 	r := New(eng, nil, 9001, time.Second, nil, nil, false)
-	if r == nil {
-		t.Fatal("nil")
-	}
 	if r.engine != eng {
 		t.Error("engine not set")
 	}
