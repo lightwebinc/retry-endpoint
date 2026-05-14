@@ -53,18 +53,21 @@ Two backends are supported:
 
 Cache keys use a dual-index scheme:
 
-- `0x01 ∥ CurSeq` (8 B) → raw frame bytes (primary)
-- `0x00 ∥ PrevSeq` (8 B) → CurSeq pointer (8 B) (secondary)
+- `0x01 ∥ SubtreeID ∥ CurSeq` (41 B) → raw frame bytes (primary)
+- `0x00 ∥ SubtreeID ∥ PrevSeq` (41 B) → CurSeq pointer (8 B) (secondary)
 
-The secondary index lets the NACK server resolve a lookup by `PrevSeq` (forward
-gap fill) even when the listener only knows the previous frame's `CurSeq`.
+Including `SubtreeID` in the key scopes each index to a single subtree's sequence
+chain, preventing collisions when different subtrees happen to produce the same
+`CurSeq` or `PrevSeq` hash value. The secondary index lets the NACK server
+resolve a lookup by `PrevSeq` (forward gap fill) even when the listener only
+knows the previous frame's `CurSeq`.
 
 ## NACK server
 
 `NACK_WORKERS` goroutines share a single `net.PacketConn` bound to
 `[nackBindAddr]:nack-port`. Each worker:
 
-1. Reads one 24-byte NACK datagram (BRC-126 wire format).
+1. Reads one 56-byte NACK datagram (BRC-126 wire format).
 2. Applies four-tier rate limiting (per-IP, per-chain, per-sequence pre-lookup;
    per-group post-lookup). Pre-lookup drops are silent. The group tier skips
    the retransmit but still sends ACK so the listener does not escalate.
@@ -74,7 +77,7 @@ gap fill) even when the listener only knows the previous frame's `CurSeq`.
 5. On **miss**: sends a 16-byte MISS (unless `-suppress-miss`). The listener
    escalates to the next endpoint immediately.
 
-### NACK wire format (BRC-126) — 24 bytes
+### NACK wire format (BRC-126) — 56 bytes
 
 | Offset | Size | Field      | Value / notes                                          |
 | ------ | ---- | ---------- | ------------------------------------------------------ |
@@ -84,6 +87,7 @@ gap fill) even when the listener only knows the previous frame's `CurSeq`.
 | 7      | 1    | LookupType | 0x00 = by PrevSeq; 0x01 = by CurSeq                    |
 | 8      | 8    | LookupSeq  | uint64 BE; the XXH64 hash to look up                   |
 | 16     | 8    | ChainID    | uint64 BE; initial CurSeq of the chain; 0 = orphan gap |
+| 24     | 32   | SubtreeID  | 32-byte batch identifier; zeros = unset                |
 
 ### ACK/MISS wire format — 16 bytes
 

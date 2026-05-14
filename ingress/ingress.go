@@ -155,10 +155,11 @@ func (w *Worker) processFrame(raw []byte) {
 		return // proxy has not stamped this frame
 	}
 
-	// Primary index: 0x01 || CurSeq → raw frame (LookupByCurSeq)
-	var primaryKey [9]byte
+	// Primary index: 0x01 || SubtreeID || CurSeq → raw frame (LookupByCurSeq)
+	var primaryKey [41]byte
 	primaryKey[0] = 0x01
-	binary.BigEndian.PutUint64(primaryKey[1:9], f.CurSeq)
+	copy(primaryKey[1:33], f.SubtreeID[:])
+	binary.BigEndian.PutUint64(primaryKey[33:41], f.CurSeq)
 	if err := w.cache.Store(primaryKey[:], raw, w.ttl); err != nil {
 		if w.rec != nil {
 			w.rec.CacheError()
@@ -167,11 +168,12 @@ func (w *Worker) processFrame(raw []byte) {
 		return
 	}
 
-	// Secondary index: 0x00 || PrevSeq → CurSeq pointer (LookupByPrevSeq)
+	// Secondary index: 0x00 || SubtreeID || PrevSeq → CurSeq pointer (LookupByPrevSeq)
 	if f.PrevSeq != 0 {
-		var secondaryKey [9]byte
+		var secondaryKey [41]byte
 		secondaryKey[0] = 0x00
-		binary.BigEndian.PutUint64(secondaryKey[1:9], f.PrevSeq)
+		copy(secondaryKey[1:33], f.SubtreeID[:])
+		binary.BigEndian.PutUint64(secondaryKey[33:41], f.PrevSeq)
 		var curSeqVal [8]byte
 		binary.BigEndian.PutUint64(curSeqVal[:], f.CurSeq)
 		if err := w.cache.Store(secondaryKey[:], curSeqVal[:], w.ttl); err != nil {

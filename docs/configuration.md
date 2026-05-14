@@ -94,7 +94,7 @@ are evicted.
 
 ### `-nack-port` / `NACK_PORT` (default: `9300`)
 
-UDP port to receive 24-byte NACK datagrams from listeners. Also the port
+UDP port to receive 56-byte NACK datagrams from listeners. Also the port
 advertised in the ADVERT beacon (listeners send NACKs here).
 
 ### `-nack-workers` / `NACK_WORKERS` (default: `runtime.NumCPU()`)

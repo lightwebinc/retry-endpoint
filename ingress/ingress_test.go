@@ -87,12 +87,15 @@ func TestProcessFrame_DualIndex(t *testing.T) {
 		t.Fatalf("expected 2 Store calls, got %d", mc.storeCount())
 	}
 
-	// Primary: key = 0x01 || CurSeq → raw frame
+	// Primary: key = 0x01 || SubtreeID(32) || CurSeq → raw frame
 	pk := mc.storeAt(0)
+	if len(pk.key) != 41 {
+		t.Errorf("primary key len = %d, want 41", len(pk.key))
+	}
 	if pk.key[0] != 0x01 {
 		t.Errorf("primary key prefix = 0x%02X, want 0x01", pk.key[0])
 	}
-	gotCurSeq := binary.BigEndian.Uint64(pk.key[1:9])
+	gotCurSeq := binary.BigEndian.Uint64(pk.key[33:41])
 	if gotCurSeq != curSeq {
 		t.Errorf("primary key CurSeq = 0x%016X, want 0x%016X", gotCurSeq, curSeq)
 	}
@@ -100,12 +103,15 @@ func TestProcessFrame_DualIndex(t *testing.T) {
 		t.Errorf("primary value len = %d, want %d", len(pk.val), len(raw))
 	}
 
-	// Secondary: key = 0x00 || PrevSeq → CurSeq (8 bytes)
+	// Secondary: key = 0x00 || SubtreeID(32) || PrevSeq → CurSeq (8 bytes)
 	sk := mc.storeAt(1)
+	if len(sk.key) != 41 {
+		t.Errorf("secondary key len = %d, want 41", len(sk.key))
+	}
 	if sk.key[0] != 0x00 {
 		t.Errorf("secondary key prefix = 0x%02X, want 0x00", sk.key[0])
 	}
-	gotPrevSeq := binary.BigEndian.Uint64(sk.key[1:9])
+	gotPrevSeq := binary.BigEndian.Uint64(sk.key[33:41])
 	if gotPrevSeq != prevSeq {
 		t.Errorf("secondary key PrevSeq = 0x%016X, want 0x%016X", gotPrevSeq, prevSeq)
 	}

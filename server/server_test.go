@@ -106,16 +106,26 @@ func buildCacheFrame(t *testing.T, curSeq uint64) []byte {
 }
 
 func storePrimary(c *mockCache, curSeq uint64, raw []byte) {
-	var pk [9]byte
+	storePrimarySub(c, [32]byte{}, curSeq, raw)
+}
+
+func storePrimarySub(c *mockCache, sub [32]byte, curSeq uint64, raw []byte) {
+	var pk [41]byte
 	pk[0] = lookupByCurSeq
-	binary.BigEndian.PutUint64(pk[1:9], curSeq)
+	copy(pk[1:33], sub[:])
+	binary.BigEndian.PutUint64(pk[33:41], curSeq)
 	_ = c.Store(pk[:], raw, time.Minute)
 }
 
 func storeSecondary(c *mockCache, prevSeq, curSeq uint64) {
-	var sk [9]byte
+	storeSecondarySub(c, [32]byte{}, prevSeq, curSeq)
+}
+
+func storeSecondarySub(c *mockCache, sub [32]byte, prevSeq, curSeq uint64) {
+	var sk [41]byte
 	sk[0] = lookupByPrevSeq
-	binary.BigEndian.PutUint64(sk[1:9], prevSeq)
+	copy(sk[1:33], sub[:])
+	binary.BigEndian.PutUint64(sk[33:41], prevSeq)
 	var val [8]byte
 	binary.BigEndian.PutUint64(val[:], curSeq)
 	_ = c.Store(sk[:], val[:], time.Minute)
@@ -136,9 +146,9 @@ func buildNACKWithChain(msgType byte, lookupType byte, lookupSeq uint64, chainID
 	return buf
 }
 
-func TestNACKSize_is24(t *testing.T) {
-	if NACKSize != 24 {
-		t.Errorf("NACKSize = %d, want 24", NACKSize)
+func TestNACKSize_is56(t *testing.T) {
+	if NACKSize != 56 {
+		t.Errorf("NACKSize = %d, want 56", NACKSize)
 	}
 }
 
