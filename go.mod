@@ -4,7 +4,7 @@ go 1.25.10
 
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0
-	github.com/lightwebinc/bitcoin-shard-common v0.3.3
+	github.com/lightwebinc/bitcoin-shard-common v0.4.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.7.3
 	go.opentelemetry.io/otel v1.43.0
