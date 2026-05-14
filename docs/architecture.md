@@ -156,8 +156,8 @@ multicast group:
 
 | `-beacon-scope` | Group           | Purpose                            |
 | --------------- | --------------- | ---------------------------------- |
-| `site`          | `FF05::FF:FFFD` | Intra-site listener discovery      |
-| `global`        | `FF0E::FF:FFFD` | Inter-AS discovery via MP-BGP MVPN |
+| `site`          | `FF05::B:FFFD` | Intra-site listener discovery      |
+| `global`        | `FF0E::B:FFFD` | Inter-AS discovery via MP-BGP MVPN |
 | `both`          | both            | Mixed deployments                  |
 
 The ADVERT carries the endpoint's NACKAddr, NACKPort, Tier, Preference, Flags,

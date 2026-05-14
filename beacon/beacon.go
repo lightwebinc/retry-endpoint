@@ -32,16 +32,16 @@ const (
 
 // Config holds beacon sender parameters.
 type Config struct {
-	NACKAddr    net.IP         // our IPv6 address for NACK reception
-	NACKPort    uint16         // our NACK listen port
-	Tier        uint8          // 0 = closest to source
-	Preference  uint8          // weighting within tier; higher = more preferred
-	Interval    time.Duration  // beacon interval (default 60s)
-	Scope       byte           // 0x05=site, 0x08=org, 0x0E=global, 0xFF=all
-	Flags       uint16         // ADVERT flags (see constants above)
-	InstanceID  uint32         // unique instance identifier
-	MiddleBytes [11]byte       // bytes 2-12 of the multicast prefix
-	Iface       *net.Interface // outgoing multicast interface
+	NACKAddr   net.IP         // our IPv6 address for NACK reception
+	NACKPort   uint16         // our NACK listen port
+	Tier       uint8          // 0 = closest to source
+	Preference uint8          // weighting within tier; higher = more preferred
+	Interval   time.Duration  // beacon interval (default 60s)
+	Scope      byte           // 0x05=site, 0x08=org, 0x0E=global, 0xFF=all
+	Flags      uint16         // ADVERT flags (see constants above)
+	InstanceID uint32         // unique instance identifier
+	GroupID    uint16         // IANA group-id occupying bytes 12–13 (default 0x000B)
+	Iface      *net.Interface // outgoing multicast interface
 }
 
 // Sender periodically multicasts ADVERT beacons.
@@ -172,15 +172,15 @@ func (s *Sender) beaconGroups() []*net.UDPAddr {
 	var groups []*net.UDPAddr
 
 	if s.cfg.Scope == 0x05 || s.cfg.Scope == 0xFF {
-		ip := shard.ControlGroupAddr(0xFF05, s.cfg.MiddleBytes, shard.CtrlGroupBeacon)
+		ip := shard.ControlGroupAddr(0xFF05, s.cfg.GroupID, shard.CtrlGroupBeacon)
 		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
 	}
 	if s.cfg.Scope == 0x08 || s.cfg.Scope == 0xFF {
-		ip := shard.ControlGroupAddr(0xFF08, s.cfg.MiddleBytes, shard.CtrlGroupBeacon)
+		ip := shard.ControlGroupAddr(0xFF08, s.cfg.GroupID, shard.CtrlGroupBeacon)
 		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
 	}
 	if s.cfg.Scope == 0x0E || s.cfg.Scope == 0xFF {
-		ip := shard.ControlGroupAddr(0xFF0E, s.cfg.MiddleBytes, shard.CtrlGroupBeacon)
+		ip := shard.ControlGroupAddr(0xFF0E, s.cfg.GroupID, shard.CtrlGroupBeacon)
 		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
 	}
 

@@ -110,7 +110,7 @@ func run() error {
 	}
 
 	// Build shard engine.
-	engine := shard.New(cfg.MCPrefix, cfg.MCMiddleBytes, cfg.ShardBits)
+	engine := shard.New(cfg.MCPrefix, cfg.MCGroupID, cfg.ShardBits)
 
 	// Build cache backend.
 	var c cache.Cache
@@ -282,16 +282,16 @@ func run() error {
 			}
 		}
 		beaconCfg := beacon.Config{
-			NACKAddr:    nackIP,
-			NACKPort:    uint16(cfg.NACKPort),
-			Tier:        uint8(cfg.BeaconTier),
-			Preference:  uint8(cfg.BeaconPreference),
-			Interval:    cfg.BeaconInterval,
-			Scope:       cfg.BeaconScopeByte,
-			Flags:       flags,
-			InstanceID:  hashInstanceID(host),
-			MiddleBytes: cfg.MCMiddleBytes,
-			Iface:       beaconIface,
+			NACKAddr:   nackIP,
+			NACKPort:   uint16(cfg.NACKPort),
+			Tier:       uint8(cfg.BeaconTier),
+			Preference: uint8(cfg.BeaconPreference),
+			Interval:   cfg.BeaconInterval,
+			Scope:      cfg.BeaconScopeByte,
+			Flags:      flags,
+			InstanceID: hashInstanceID(host),
+			GroupID:    cfg.MCGroupID,
+			Iface:      beaconIface,
 		}
 		beaconSender := beacon.New(beaconCfg)
 		beaconSender.SetRecorder(rec)

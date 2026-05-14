@@ -7,19 +7,20 @@ import (
 	"time"
 
 	"github.com/lightwebinc/bitcoin-shard-common/frame"
+	"github.com/lightwebinc/bitcoin-shard-common/shard"
 )
 
 func testConfig() Config {
 	return Config{
-		NACKAddr:    net.ParseIP("fd20::41"),
-		NACKPort:    9300,
-		Tier:        0,
-		Preference:  128,
-		Interval:    60 * time.Second,
-		Scope:       0x05,
-		Flags:       FlagMulticastRetransmit,
-		InstanceID:  0xDEADBEEF,
-		MiddleBytes: [11]byte{},
+		NACKAddr:   net.ParseIP("fd20::41"),
+		NACKPort:   9300,
+		Tier:       0,
+		Preference: 128,
+		Interval:   60 * time.Second,
+		Scope:      0x05,
+		Flags:      FlagMulticastRetransmit,
+		InstanceID: 0xDEADBEEF,
+		GroupID:    shard.DefaultGroupID,
 	}
 }
 

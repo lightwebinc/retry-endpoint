@@ -13,7 +13,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	eng := shard.New(0xFF05, [11]byte{}, 2)
+	eng := shard.New(0xFF05, shard.DefaultGroupID, 2)
 	r := New(eng, nil, 9001, time.Second, nil, nil, false)
 	if r.engine != eng {
 		t.Error("engine not set")
@@ -65,7 +65,7 @@ func TestRetransmit_DedupSuppresses(t *testing.T) {
 	}
 	defer func() { _ = rc.Close() }()
 
-	eng := shard.New(0xFF05, [11]byte{}, 2)
+	eng := shard.New(0xFF05, shard.DefaultGroupID, 2)
 	r := New(eng, nil, 9001, time.Minute, rc, nil, false)
 	// No egress sockets opened — but dedup path runs first and the second call
 	// must short-circuit before reaching the (empty) socket loop.
@@ -106,7 +106,7 @@ func TestOpen_LoopbackIface(t *testing.T) {
 	if lo == nil {
 		t.Skip("no loopback")
 	}
-	eng := shard.New(0xFF05, [11]byte{}, 2)
+	eng := shard.New(0xFF05, shard.DefaultGroupID, 2)
 	r := New(eng, []*net.Interface{lo}, 9001, 0, nil, nil, false)
 	if err := r.Open(); err != nil {
 		t.Fatalf("Open: %v", err)

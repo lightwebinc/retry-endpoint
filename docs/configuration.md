@@ -27,26 +27,27 @@ Multicast scope nibble. Must match the proxy's and listeners' `-scope`.
 | `org` | `FF08` | Organisation-wide |
 | `global` | `FF0E` | Internet-wide |
 
-### `-mc-base-addr` / `MC_BASE_ADDR`
+### `-mc-group-id` / `MC_GROUP_ID` (default: `0x000B`)
 
-Base IPv6 address for the assigned multicast address space (bytes 2–12). Must
-match the proxy's `-mc-base-addr`. Leave empty to use all-zeros middle bytes.
+IANA group-id occupying bytes 12–13 of every IPv6 multicast address.
+Default `0x000B` corresponds to the IANA-assigned Bitcoin allocation
+`FF0X::B`. Must match the proxy's `-mc-group-id`.
 
 ---
 
 ## Sharding
 
-### `-shard-bits` / `SHARD_BITS` (default: `16`)
+### `-shard-bits` / `SHARD_BITS` (default: `8`)
 
 Txid prefix bit width used as the shard key. Must exactly match the proxy's
 `-shard-bits`. Determines how many multicast groups the endpoint joins (2ᴺ).
 
 | Bits | Groups |
-|------|------------|
+|------|--------|
 | 1 | 2 |
 | 8 | 256 |
-| 16 | 65 536 |
-| 24 | 16 777 216 |
+| 12 | 4 096 |
+| 15 | 32 768 (max; top of 16-bit space reserved for control) |
 
 ---
 
@@ -244,11 +245,11 @@ Multicast scope for ADVERT datagrams.
 
 | Value | Group | Use case |
 |--------|-------|----------|
-| `site` | `FF05::FF:FFFD` | All listeners on the local site |
-| `global` | `FF0E::FF:FFFD` | Inter-AS via MP-BGP MVPN |
+| `site` | `FF05::B:FFFD` | All listeners on the local site |
+| `global` | `FF0E::B:FFFD` | Inter-AS via MP-BGP MVPN |
 | `both` | both groups | Site + global simultaneously (two ADVERTs per interval) |
 
-Org scope (`FF08::FF:FFFD`, wire byte `0x08`) is defined in the BRC-126 wire format but `org` is not a supported flag value.
+Org scope (`FF08::B:FFFD`, wire byte `0x08`) is defined in the BRC-126 wire format but `org` is not a supported flag value.
 
 ### `-beacon-flags-multicast` / `BEACON_FLAGS_MULTICAST` (default: `true`)
 

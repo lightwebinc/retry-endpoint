@@ -382,7 +382,7 @@ func TestProcessNACK_GroupLimit_SkipsRetransmit_StillACKs(t *testing.T) {
 		GroupBurst:  1,
 	})
 
-	engine := shard.New(0xFF05, [11]byte{}, 2)
+	engine := shard.New(0xFF05, shard.DefaultGroupID, 2)
 	s := New(9300, mc, tightRL, nil, rt, 1, false)
 	s.SetShardEngine(engine)
 	src := &net.UDPAddr{IP: net.IPv6loopback, Port: 12345}
