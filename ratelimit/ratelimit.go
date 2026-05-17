@@ -1,8 +1,8 @@
 // Package ratelimit provides four-tier rate limiting for NACK requests:
 //
 //  1. Per-IP token bucket (overall flood protection).
-//  2. Per-(srcIP, chainID) sliding window (per-flow NACK storm cap).
-//  3. Per-LookupSeq sliding window (per-gap retry cap).
+//  2. Per-(srcIP, HashKey) sliding window (per-flow NACK storm cap).
+//  3. Per-SeqNum sliding window (per-gap retry cap).
 //  4. Per-(srcIP, groupIdx) token bucket (post-lookup retransmit bandwidth cap).
 //
 // Tiers 1-3 are pre-lookup (call Allow + AllowChain before cache access).
@@ -42,9 +42,9 @@ type Config struct {
 	IPBurst        int           // Burst size per source IP
 	SenderRate     float64       // Alias for ChainRate (backward-compat)
 	SenderWindow   time.Duration // Alias for ChainWindow (backward-compat)
-	ChainRate      float64       // Max NACKs per ChainWindow per (srcIP, chainID)
+	ChainRate      float64       // Max NACKs per ChainWindow per (srcIP, HashKey)
 	ChainWindow    time.Duration // Sliding window for chain limiter
-	SequenceMax    int           // Max requests per LookupSeq per SequenceWindow
+	SequenceMax    int           // Max requests per SeqNum per SequenceWindow
 	SequenceWindow time.Duration // Sliding window for sequence limiter
 	GroupRate      float64       // Retransmits per second per (srcIP, groupIdx)
 	GroupBurst     int           // Burst size per (srcIP, groupIdx)
@@ -86,28 +86,28 @@ func New(cfg Config) *Limiter {
 }
 
 // Allow checks the IP and sequence tiers (pre-lookup).
-// srcIP is the listener source address; lookupSeq is the LookupSeq field
-// from the NACK datagram. Returns (true, "") if allowed.
-func (r *Limiter) Allow(srcIP net.IP, lookupSeq uint64) (bool, Level) {
+// srcIP is the listener source address; startSeq is the StartSeq field
+// from the NACK datagram (SeqNum of the missing frame). Returns (true, "") if allowed.
+func (r *Limiter) Allow(srcIP net.IP, startSeq uint64) (bool, Level) {
 	if !r.ipLimiter.Allow(srcIP.String()) {
 		return false, LevelIP
 	}
-	if !r.sequenceLimiter.Allow(lookupSeq) {
+	if !r.sequenceLimiter.Allow(startSeq) {
 		return false, LevelSequence
 	}
 	return true, ""
 }
 
 // AllowChain checks the chain tier (pre-lookup, between IP and sequence).
-// chainID is the ChainID field from the NACK datagram. 0 means the gap has
-// not yet been attributed to a specific hash chain (orphan gap); rate-limiting
-// on ChainID=0 would bucket all such unattributed gaps together and prematurely
-// exhaust a shared limit, so the check is skipped.
-func (r *Limiter) AllowChain(srcIP net.IP, chainID uint64) bool {
-	if chainID == 0 {
+// hashKey is the HashKey field from the NACK datagram. 0 means the frame was
+// not stamped by the proxy (unstamped); rate-limiting on HashKey=0 would
+// bucket all such unattributed gaps together and prematurely exhaust a shared
+// limit, so the check is skipped.
+func (r *Limiter) AllowChain(srcIP net.IP, hashKey uint64) bool {
+	if hashKey == 0 {
 		return true
 	}
-	key := fmt.Sprintf("%s:%016x", srcIP.String(), chainID)
+	key := fmt.Sprintf("%s:%016x", srcIP.String(), hashKey)
 	return r.chainLimiter.Allow(key)
 }
 
@@ -196,9 +196,9 @@ func (r *slidingWindowLimiter) Allow(key string) bool {
 	return true
 }
 
-// ── sliding window (per uint64 key, for LookupSeq) ────────────────────────────
+// ── sliding window (per uint64 key, for SeqNum) ───────────────────────────────────────────
 
-// sequenceLimiter provides sliding-window rate limiting per LookupSeq (uint64).
+// sequenceLimiter provides sliding-window rate limiting per SeqNum (uint64).
 //
 // The legacy implementation used a monotonic counter per SequenceID with no
 // expiration. That caused long-lived flows to eventually exhaust the counter
@@ -221,15 +221,15 @@ func newSequenceLimiter(max int, window time.Duration) *sequenceLimiter {
 	}
 }
 
-func (r *sequenceLimiter) Allow(lookupSeq uint64) bool {
+func (r *sequenceLimiter) Allow(seqNum uint64) bool {
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	entry, ok := r.seqs[lookupSeq]
+	entry, ok := r.seqs[seqNum]
 	if !ok {
 		entry = &windowEntry{timestamps: make([]time.Time, 0, r.max)}
-		r.seqs[lookupSeq] = entry
+		r.seqs[seqNum] = entry
 	}
 
 	cutoff := now.Add(-r.window)

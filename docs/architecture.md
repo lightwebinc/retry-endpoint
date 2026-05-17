@@ -51,43 +51,41 @@ Two backends are supported:
 | `memory` | In-process freecache (60 s TTL by default) | None                  | Single-node; cache lost on restart            |
 | `redis`  | External Redis (`bre:frame:<key>`)         | Cross-instance SET NX | Shared across all endpoints; survives restart |
 
-Cache keys use a dual-index scheme:
+Cache keys use a single 16-byte key:
 
-- `0x01 ∥ SubtreeID ∥ CurSeq` (41 B) → raw frame bytes (primary)
-- `0x00 ∥ SubtreeID ∥ PrevSeq` (41 B) → CurSeq pointer (8 B) (secondary)
+- `HashKey (8B) ∥ SeqNum (8B)` → raw frame bytes
 
-Including `SubtreeID` in the key scopes each index to a single subtree's sequence
-chain, preventing collisions when different subtrees happen to produce the same
-`CurSeq` or `PrevSeq` hash value. The secondary index lets the NACK server
-resolve a lookup by `PrevSeq` (forward gap fill) even when the listener only
-knows the previous frame's `CurSeq`.
+`HashKey` is a stable per-flow identifier (`XXH64(senderIPv6 ∥ groupIdx ∥ subtreeID)`)
+stamped by the proxy. `SeqNum` is a monotonic per-flow counter. Together they
+uniquely identify every frame within a flow. No secondary index is needed.
 
 ## NACK server
 
 `NACK_WORKERS` goroutines share a single `net.PacketConn` bound to
 `[nackBindAddr]:nack-port`. Each worker:
 
-1. Reads one 56-byte NACK datagram (BRC-126 wire format).
-2. Applies four-tier rate limiting (per-IP, per-chain, per-sequence pre-lookup;
+1. Reads one 64-byte NACK datagram (BRC-126 wire format).
+2. Applies four-tier rate limiting (per-IP, per-HashKey, per-SeqNum pre-lookup;
    per-group post-lookup). Pre-lookup drops are silent. The group tier skips
    the retransmit but still sends ACK so the listener does not escalate.
-3. Looks up the frame in the cache by `LookupType` + `LookupSeq`.
+3. Looks up the frame in the cache by `HashKey ∥ StartSeq` (16-byte key).
 4. On **hit**: dispatches `retransmit.Send`, then sends a 16-byte ACK (unless
    `-suppress-ack`).
 5. On **miss**: sends a 16-byte MISS (unless `-suppress-miss`). The listener
    escalates to the next endpoint immediately.
 
-### NACK wire format (BRC-126) — 56 bytes
+### NACK wire format (BRC-126) — 64 bytes
 
-| Offset | Size | Field      | Value / notes                                          |
-| ------ | ---- | ---------- | ------------------------------------------------------ |
-| 0      | 4    | Magic      | 0xE3E1F3E8                                             |
-| 4      | 2    | ProtoVer   | 0x02BF                                                 |
-| 6      | 1    | MsgType    | 0x10 (NACK)                                            |
-| 7      | 1    | LookupType | 0x00 = by PrevSeq; 0x01 = by CurSeq                    |
-| 8      | 8    | LookupSeq  | uint64 BE; the XXH64 hash to look up                   |
-| 16     | 8    | ChainID    | uint64 BE; initial CurSeq of the chain; 0 = orphan gap |
-| 24     | 32   | SubtreeID  | 32-byte batch identifier; zeros = unset                |
+| Offset | Size | Field     | Value / notes                                                 |
+| ------ | ---- | --------- | ------------------------------------------------------------- |
+| 0      | 4    | Magic     | 0xE3E1F3E8                                                    |
+| 4      | 2    | ProtoVer  | 0x02BF                                                        |
+| 6      | 1    | MsgType   | 0x10 (NACK)                                                   |
+| 7      | 1    | Flags     | Reserved; must be 0x00                                        |
+| 8      | 8    | HashKey   | uint64 BE; stable per-flow XXH64 identifier                   |
+| 16     | 8    | StartSeq  | uint64 BE; first missing SeqNum (inclusive)                    |
+| 24     | 8    | EndSeq    | uint64 BE; last missing SeqNum (inclusive; == StartSeq for 1)  |
+| 32     | 32   | SubtreeID | 32-byte batch identifier; zeros = unset                       |
 
 ### ACK/MISS wire format — 16 bytes
 
@@ -95,9 +93,9 @@ knows the previous frame's `CurSeq`.
 | ------ | ---- | -------- | --------------------------------------------------------- |
 | 0      | 4    | Magic    | 0xE3E1F3E8                                                |
 | 4      | 2    | ProtoVer | 0x02BF                                                    |
-| 6      | 1    | MsgType  | 0x12 = ACK; 0x11 = MISS                                   |
-| 7      | 1    | Flags    | 0x01 on ACK; 0x00 on MISS                                 |
-| 8      | 8    | CurSeq   | uint64 BE; CurSeq of the resolved frame (ACK) or 0 (MISS) |
+| 6      | 1    | MsgType  | 0x12 = ACK; 0x11 = MISS                                    |
+| 7      | 1    | Flags    | 0x01 on ACK (multicast); 0x02 (unicast); 0x00 on MISS      |
+| 8      | 8    | SeqNum   | uint64 BE; SeqNum of the resolved frame (ACK) or 0 (MISS)  |
 
 ### NACK bind address
 
@@ -132,7 +130,7 @@ interface (set via `-egress-iface`). On a cache hit it:
    egress interface.
 
 Listeners that receive the retransmitted multicast frame call
-`nack.Tracker.Observe`; if the incoming `CurSeq` matches a pending gap entry the
+`nack.Tracker.Observe`; if the incoming `SeqNum` matches a pending gap entry the
 gap is auto-closed inline, before the next sweeper tick.
 
 ### Unicast retransmit
@@ -147,7 +145,7 @@ Both modes can fire for the same NACK when both beacon flags are set.
 
 ### Cross-instance deduplication
 
-When the Redis backend is in use, a `SET NX` with the `CurSeq` key and a
+When the Redis backend is in use, a `SET NX` with the `HashKey∥SeqNum` key and a
 `dedup-window` TTL (default 60 s) prevents two endpoints from both
 retransmitting the same frame. The first endpoint to acquire the key wins;
 others skip the send.
@@ -182,11 +180,11 @@ listener must not escalate when the frame is available.
 | #   | Level                 | Algorithm      | Position    | Config flags                              |
 | --- | --------------------- | -------------- | ----------- | ----------------------------------------- |
 | 1   | Per source IP         | Token bucket   | Pre-lookup  | `-rl-ip-rate`, `-rl-ip-burst`             |
-| 2   | Per (srcIP, ChainID)  | Sliding window | Pre-lookup  | `-rl-chain-rate`, `-rl-chain-window`      |
-| 3   | Per `LookupSeq`       | Sliding window | Pre-lookup  | `-rl-sequence-max`, `-rl-sequence-window` |
+| 2   | Per (srcIP, HashKey)  | Sliding window | Pre-lookup  | `-rl-chain-rate`, `-rl-chain-window`      |
+| 3   | Per SeqNum            | Sliding window | Pre-lookup  | `-rl-sequence-max`, `-rl-sequence-window` |
 | 4   | Per (srcIP, groupIdx) | Token bucket   | Post-lookup | `-rl-group-rate`, `-rl-group-burst`       |
 
-`ChainID=0` (orphan/unattributed gap) bypasses tier 2 to avoid bucketing all
+`HashKey=0` (unstamped frame) bypasses tier 2 to avoid bucketing all
 unattributed gaps from the same source together.
 
 ## Graceful shutdown
@@ -212,7 +210,7 @@ bitcoin-retry-endpoint/
   server/          UDP NACK receive pool; rate-limit → cache lookup → retransmit
   retransmit/      multicast + unicast retransmit egress; cross-instance dedup
   beacon/          ADVERT beacon sender; IPV6_MULTICAST_IF binding
-  ratelimit/       four-tier rate limiter (IP, chain, sequence, group)
+  ratelimit/       four-tier rate limiter (IP, HashKey, SeqNum, group)
   metrics/         OTel + Prometheus instrumentation (bre_ prefix)
 ```
 
@@ -223,5 +221,5 @@ Protocol primitives are provided by
 bitcoin-shard-common/
   frame/    BRC-12/BRC-124/BRC-128 wire format: Decode, Encode, constants, errors
   shard/    txid → group index → IPv6 multicast address derivation
-  seqhash/  XXH64 hash chain for PrevSeq/CurSeq stamping
+  seqhash/  XXH64 flow hash for HashKey computation
 ```

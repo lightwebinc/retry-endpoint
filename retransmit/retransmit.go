@@ -167,12 +167,12 @@ func (r *Retransmitter) openEgressSocket(iface *net.Interface) (*net.UDPConn, er
 }
 
 // buildDedupKey builds a deduplication key from the frame.
-// Key: CurSeq (bytes 48–55), the unique XXH64 chain hash for this frame.
+// Key: SeqNum (bytes 48–55), the monotonic per-flow counter for this frame.
 func (r *Retransmitter) buildDedupKey(raw []byte) []byte {
 	if len(raw) < 56 {
 		return nil
 	}
 	key := make([]byte, 8)
-	copy(key, raw[48:56]) // CurSeq
+	copy(key, raw[48:56]) // SeqNum
 	return key
 }

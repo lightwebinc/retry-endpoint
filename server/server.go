@@ -311,13 +311,13 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 }
 
 // sendResponse sends a 16-byte ACK or MISS response to src.
-func (s *Server) sendResponse(conn net.PacketConn, src *net.UDPAddr, msgType byte, flags byte, curSeq uint64) {
+func (s *Server) sendResponse(conn net.PacketConn, src *net.UDPAddr, msgType byte, flags byte, seqNum uint64) {
 	var buf [ResponseSize]byte
 	binary.BigEndian.PutUint32(buf[0:4], frame.MagicBSV)
 	binary.BigEndian.PutUint16(buf[4:6], frame.ProtoVer)
 	buf[6] = msgType
 	buf[7] = flags
-	binary.BigEndian.PutUint64(buf[8:16], curSeq)
+	binary.BigEndian.PutUint64(buf[8:16], seqNum)
 
 	label := "ack"
 	if msgType == msgTypeMISS {

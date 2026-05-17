@@ -7,11 +7,9 @@ import "time"
 // Cache defines the interface for frame storage backends.
 type Cache interface {
 	// Store stores a value under the given key with the specified TTL.
-	// key is a 41-byte composite: prefix byte (0x00 = PrevSeq secondary index,
-	// 0x01 = CurSeq primary index) followed by the 32-byte SubtreeID
-	// namespace and the 8-byte XXH64 sequence value.
-	// For the primary index, value is the raw frame bytes.
-	// For the secondary index, value is the 8-byte CurSeq of the primary entry.
+	// key is a 16-byte composite: HashKey (8B, stable per-flow XXH64
+	// identifier) followed by SeqNum (8B, monotonic per-flow counter).
+	// value is the raw frame bytes.
 	Store(key []byte, value []byte, ttl time.Duration) error
 
 	// Retrieve retrieves the frame value for the given key.

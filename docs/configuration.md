@@ -171,30 +171,29 @@ sustained rate before limiting kicks in.
 
 ### `-rl-sequence-max` / `RL_SEQUENCE_MAX` (default: `100`)
 
-Maximum number of requests for the same `LookupSeq` value within
+Maximum number of requests for the same `SeqNum` value within
 `-rl-sequence-window`. Prevents a single stuck listener from flooding the
 server with repeated NACKs for the same gap.
 
 ### `-rl-sequence-window` / `RL_SEQUENCE_WINDOW` (default: `1m`)
 
-Sliding window duration for the per-`LookupSeq` counter.
+Sliding window duration for the per-`SeqNum` counter.
 
 ### `-rl-chain-rate` / `RL_CHAIN_RATE` (default: `500`)
 
 Maximum NACK requests allowed within `-rl-chain-window` for a given
-`(srcIP, ChainID)` pair. `ChainID` is the initial `CurSeq` of the hash-chain
-carried in the NACK datagram (offset 16). A `ChainID` of `0` (orphan/unattributed
-gap) bypasses this tier entirely.
+`(srcIP, HashKey)` pair. `HashKey` is the stable per-flow XXH64 identifier
+carried in the NACK datagram (offset 8). A `HashKey` of `0` (unstamped frame)
+bypasses this tier entirely.
 
 ### `-rl-chain-window` / `RL_CHAIN_WINDOW` (default: `1m`)
 
-Sliding window duration for the per-`(srcIP, ChainID)` counter.
+Sliding window duration for the per-`(srcIP, HashKey)` counter.
 
 ### `-rl-sender-rate` / `RL_SENDER_RATE`, `-rl-sender-window` / `RL_SENDER_WINDOW`
 
 Backward-compatible aliases for `-rl-chain-rate` / `-rl-chain-window`. If the
 alias is set and the canonical flag is not, the alias value takes precedence.
-New deployments should use the canonical names.
 
 ### `-rl-group-rate` / `RL_GROUP_RATE` (default: `200`)
 
@@ -324,7 +323,7 @@ Metric export interval for the OTLP push exporter. Ignored when
 | `bre_cache_misses_total` | NACK requests with no cached frame |
 | `bre_retransmits_total` | Frames sent to multicast egress |
 | `bre_retransmit_dedup_total` | Retransmits skipped by cross-instance dedup (requires `REDIS_ADDR`) |
-| `bre_rate_limit_drops_total{level=ip\|chain\|sequence\|group}` | Requests dropped (or retransmit suppressed) by rate limiter tier |
+| `bre_rate_limit_drops_total{level=ip\|hashkey\|sequence\|group}` | Requests dropped (or retransmit suppressed) by rate limiter tier |
 
 ---
 

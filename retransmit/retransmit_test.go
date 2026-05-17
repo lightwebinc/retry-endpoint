@@ -71,14 +71,14 @@ func TestRetransmit_DedupSuppresses(t *testing.T) {
 	// must short-circuit before reaching the (empty) socket loop.
 
 	raw := make([]byte, 100)
-	raw[48] = 0xAA // CurSeq[0]
+	raw[48] = 0xAA // SeqNum[0]
 	raw[55] = 0xBB
 
 	// First call: SET NX succeeds → proceeds to socket loop (empty → no error).
 	if err := r.Retransmit(raw, [32]byte{}); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	// Second call with same CurSeq: SET NX returns false → returns nil early.
+	// Second call with same SeqNum: SET NX returns false → returns nil early.
 	if err := r.Retransmit(raw, [32]byte{}); err != nil {
 		t.Errorf("dedup second: %v", err)
 	}

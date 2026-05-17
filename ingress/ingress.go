@@ -11,13 +11,12 @@
 // # Hot path per frame
 //
 //  1. Recvfrom (64 MiB receive buffer)
-//  2. frame.Decode — extract PrevSeq, CurSeq
-//  3. Drop if CurSeq == 0 (proxy has not stamped the frame)
-//  4. Store primary index:   key = 0x01 || CurSeq  (8+1 = 9 bytes) → raw frame
-//  5. Store secondary index: key = 0x00 || PrevSeq (8+1 = 9 bytes) → CurSeq (8 bytes)
+//  2. frame.Decode — extract HashKey, SeqNum
+//  3. Drop if SeqNum == 0 (proxy has not stamped the frame)
+//  4. Store: key = HashKey(8B) || SeqNum(8B) → raw frame
 //
-// The dual index lets the retry endpoint serve both LookupByCurSeq and
-// LookupByPrevSeq NACK requests without scanning all cached frames.
+// The single 16-byte key (HashKey ∥ SeqNum) uniquely identifies every frame
+// within a flow. The NACK server performs lookups using the same key.
 package ingress
 
 import (

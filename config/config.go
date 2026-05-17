@@ -55,10 +55,10 @@ type Config struct {
 	RLIPBurst        int           // IP burst size
 	RLSenderRate     float64       // Alias for RLChainRate (backward-compat)
 	RLSenderWindow   time.Duration // Alias for RLChainWindow (backward-compat)
-	RLChainRate      float64       // Max NACKs per window per (srcIP, chainID)
-	RLChainWindow    time.Duration // Sliding window for per-chain limiter
-	RLSequenceMax    int           // Max requests per SequenceID per SequenceWindow
-	RLSequenceWindow time.Duration // SequenceID sliding window duration
+	RLChainRate      float64       // Max NACKs per window per (srcIP, HashKey)
+	RLChainWindow    time.Duration // Sliding window for per-HashKey limiter
+	RLSequenceMax    int           // Max requests per SeqNum per SequenceWindow
+	RLSequenceWindow time.Duration // SeqNum sliding window duration
 	RLGroupRate      float64       // Retransmits per second per (srcIP, groupIdx)
 	RLGroupBurst     int           // Burst size per (srcIP, groupIdx)
 
@@ -131,7 +131,7 @@ func Load() (*Config, error) {
 	flag.DurationVar(&c.RLSenderWindow, "rl-sender-window", envDuration("RL_SENDER_WINDOW", 0),
 		"alias for rl-chain-window (backward-compat)")
 	flag.Float64Var(&c.RLChainRate, "rl-chain-rate", envFloat("RL_CHAIN_RATE", 500),
-		"max NACKs per window per (srcIP, chainID)")
+		"max NACKs per window per (srcIP, HashKey)")
 	flag.DurationVar(&c.RLChainWindow, "rl-chain-window", envDuration("RL_CHAIN_WINDOW", time.Minute),
 		"sliding window for per-chain NACK limiter")
 	flag.IntVar(&c.RLSequenceMax, "rl-sequence-max", envInt("RL_SEQUENCE_MAX", 100),
