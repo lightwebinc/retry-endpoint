@@ -33,6 +33,10 @@ jobs:
         with:
           go-version-file: bitcoin-retry-endpoint/go.mod
 
+      - name: Use local bitcoin-shard-common
+        working-directory: bitcoin-retry-endpoint
+        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
