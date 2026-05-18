@@ -340,5 +340,11 @@ func buildGroups(cfg *config.Config, engine *shard.Engine) ([]*net.UDPAddr, erro
 	ctrlIP := shard.ControlGroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.CtrlGroupControl)
 	groups = append(groups, &net.UDPAddr{IP: ctrlIP, Port: cfg.ListenPort})
 
+	// Join the subtree data group (FF0X::B:FFFB) when BRC-132 caching is enabled.
+	if cfg.SubtreeDataEnabled {
+		subtreeDataIP := shard.ControlGroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.CtrlGroupSubtreeAnnounce)
+		groups = append(groups, &net.UDPAddr{IP: subtreeDataIP, Port: cfg.ListenPort})
+	}
+
 	return groups, nil
 }

@@ -142,6 +142,13 @@ func (w *Worker) processFrame(raw []byte) {
 		return
 	}
 
+	// BRC-132 subtree data frames (FrameVer 0x05) are handled separately
+	// because frame.Decode rejects V5 with ErrBadVer.
+	if frame.IsSubtreeDataFrame(raw) {
+		w.processSubtreeDataFrame(raw)
+		return
+	}
+
 	f, err := frame.Decode(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -229,6 +236,53 @@ func (w *Worker) processBlockFrame(raw []byte) {
 			"msg_type", bf.MsgType,
 			"hash_key", bf.HashKey,
 			"seq_num", bf.SeqNum,
+		)
+	}
+}
+
+// processSubtreeDataFrame handles BRC-132 subtree data frames (FrameVer 0x05).
+// Uses the same HashKey ∥ SeqNum cache key as regular and block frames.
+func (w *Worker) processSubtreeDataFrame(raw []byte) {
+	sf, err := frame.DecodeSubtreeData(raw)
+	if err != nil {
+		if w.rec != nil {
+			w.rec.FrameDropped("decode_error")
+		}
+		if w.debug {
+			w.log.Debug("subtree data frame decode error", "err", err, "len", len(raw))
+		}
+		return
+	}
+
+	if w.rec != nil {
+		w.rec.FrameReceived()
+	}
+
+	if sf.SeqNum == 0 {
+		return // proxy has not stamped this frame
+	}
+
+	var key [16]byte
+	binary.BigEndian.PutUint64(key[0:8], sf.HashKey)
+	binary.BigEndian.PutUint64(key[8:16], sf.SeqNum)
+	if err := w.cache.Store(key[:], raw, w.ttl); err != nil {
+		if w.rec != nil {
+			w.rec.CacheError()
+		}
+		w.log.Error("cache store error", "err", err)
+		return
+	}
+
+	if w.rec != nil {
+		w.rec.FrameCached()
+	}
+
+	if w.debug {
+		w.log.Debug("subtree data frame cached",
+			"subtree_id", fmt.Sprintf("%x", sf.SubtreeID[:8]),
+			"msg_type", sf.MsgType,
+			"hash_key", sf.HashKey,
+			"seq_num", sf.SeqNum,
 		)
 	}
 }

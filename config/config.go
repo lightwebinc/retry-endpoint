@@ -85,6 +85,9 @@ type Config struct {
 	BeaconFlagsDraining  bool
 	BeaconNACKAddr       string // explicit IPv6 unicast NACK address for ADVERT; auto-detected if empty
 
+	// BRC-132 subtree data
+	SubtreeDataEnabled bool // join CtrlGroupSubtreeAnnounce (0xFFFB) for subtree data caching
+
 	// Response suppression (BRC-126)
 	SuppressACK  bool // do not emit ACK responses
 	SuppressMISS bool // do not emit MISS responses
@@ -148,6 +151,8 @@ func Load() (*Config, error) {
 	groupIDFlag := flag.String("mc-group-id", envStr("MC_GROUP_ID", "0x000B"),
 		"IANA group-id (bytes 12–13 of the IPv6 multicast address); default 0x000B (IANA Bitcoin)")
 
+	flag.BoolVar(&c.SubtreeDataEnabled, "subtree-data-enabled", envBool("SUBTREE_DATA_ENABLED", false),
+		"enable BRC-132 subtree data caching: join CtrlGroupSubtreeAnnounce (0xFFFB) group")
 	flag.BoolVar(&c.Debug, "debug", envBool("DEBUG", false),
 		"enable per-packet debug logging")
 	flag.DurationVar(&c.DrainTimeout, "drain-timeout", envDuration("DRAIN_TIMEOUT", 0),
