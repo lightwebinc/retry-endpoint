@@ -149,6 +149,13 @@ func (w *Worker) processFrame(raw []byte) {
 		return
 	}
 
+	// BRC-134 anchor transaction frames (FrameVer 0x06) are handled
+	// separately because frame.Decode rejects V6 with ErrBadVer.
+	if frame.IsAnchorFrame(raw) {
+		w.processAnchorFrame(raw)
+		return
+	}
+
 	f, err := frame.Decode(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -283,6 +290,52 @@ func (w *Worker) processSubtreeDataFrame(raw []byte) {
 			"msg_type", sf.MsgType,
 			"hash_key", sf.HashKey,
 			"seq_num", sf.SeqNum,
+		)
+	}
+}
+
+// processAnchorFrame handles BRC-134 anchor transaction frames (FrameVer 0x06).
+// Uses the same HashKey ∥ SeqNum cache key as other frame types.
+func (w *Worker) processAnchorFrame(raw []byte) {
+	af, err := frame.DecodeAnchor(raw)
+	if err != nil {
+		if w.rec != nil {
+			w.rec.FrameDropped("decode_error")
+		}
+		if w.debug {
+			w.log.Debug("anchor frame decode error", "err", err, "len", len(raw))
+		}
+		return
+	}
+
+	if w.rec != nil {
+		w.rec.FrameReceived()
+	}
+
+	if af.SeqNum == 0 {
+		return // proxy has not stamped this frame
+	}
+
+	var key [16]byte
+	binary.BigEndian.PutUint64(key[0:8], af.HashKey)
+	binary.BigEndian.PutUint64(key[8:16], af.SeqNum)
+	if err := w.cache.Store(key[:], raw, w.ttl); err != nil {
+		if w.rec != nil {
+			w.rec.CacheError()
+		}
+		w.log.Error("cache store error", "err", err)
+		return
+	}
+
+	if w.rec != nil {
+		w.rec.FrameCached()
+	}
+
+	if w.debug {
+		w.log.Debug("anchor frame cached",
+			"txid", fmt.Sprintf("%x", af.TxID[:8]),
+			"hash_key", af.HashKey,
+			"seq_num", af.SeqNum,
 		)
 	}
 }

@@ -122,6 +122,9 @@ func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 		case frame.FrameVerV5:
 			subtreeIP := shard.ControlGroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.CtrlGroupSubtreeAnnounce)
 			groupAddr = &net.UDPAddr{IP: subtreeIP, Port: r.egressPort}
+		case frame.FrameVerV6:
+			ctrlIP := shard.ControlGroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.CtrlGroupControl)
+			groupAddr = &net.UDPAddr{IP: ctrlIP, Port: r.egressPort}
 		default:
 			groupIdx := r.engine.GroupIndex(&txID)
 			groupAddr = r.engine.Addr(groupIdx, r.egressPort)
