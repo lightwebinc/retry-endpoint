@@ -3,9 +3,14 @@
 ## Overview
 
 `bitcoin-retry-endpoint` sits alongside `bitcoin-shard-listener` on the multicast
-fabric. It joins all shard groups plus `CtrlGroupControl` (BRC-131) and optionally
+fabric. It joins all shard groups plus `CtrlGroupControl` (BRC-131 / BRC-134) and optionally
 `CtrlGroupSubtreeAnnounce` (BRC-132), caches every frame it receives, and serves
-unicast NACK requests from listeners that detect sequence gaps. On a cache hit it
+unicast NACK requests from listeners that detect sequence gaps.
+
+Foundational concepts (shard hierarchy, frame versions, NACK semantics) live in
+[multicast-skills/architecture.md](../../../multicast-skills/architecture.md) and
+[multicast-skills/protocol.md](../../../multicast-skills/protocol.md); BRC wire formats in
+[bitcoin-multicast/docs/](../../../bitcoin-multicast/docs/). On a cache hit it
 retransmits the frame via multicast egress and/or directly to the requesting listener
 via unicast, then sends an ACK response. On a miss it sends a MISS response so the
 listener can escalate immediately to the next endpoint.
@@ -38,11 +43,15 @@ listen port, joins all `NumGroups` shard groups, and writes each received frame 
 the cache with the configured TTL.
 
 In addition to the shard groups, the ingress worker always joins `CtrlGroupControl`
-(`FF0X::B:FFFE`) to cache BRC-131 block control frames. When `-subtree-data-enabled=true`,
-it also joins `CtrlGroupSubtreeAnnounce` (`FF0X::B:FFFB`) to cache BRC-132 subtree data
-frames. The cache key is frame-version-agnostic: `HashKey (8B) ∥ SeqNum (8B)` → raw frame
-bytes regardless of frame type, so BRC-131 and BRC-132 frames are served on NACK request
-with the same lookup path as BRC-124/BRC-128 frames.
+(`FF0X::B:FFFE`) to cache BRC-131 block control frames and BRC-134 anchor transaction
+frames (FrameVerV6). When `-subtree-data-enabled=true`, it also joins
+`CtrlGroupSubtreeAnnounce` (`FF0X::B:FFFB`) to cache BRC-132 subtree data frames. The cache
+key is frame-version-agnostic: `HashKey (8B) ∥ SeqNum (8B)` → raw frame bytes regardless of
+frame type, so BRC-131, BRC-132, and BRC-134 frames are served on NACK request with the same
+lookup path as BRC-124/BRC-128 frames.
+
+See [bitcoin-multicast/docs/brc-134-anchor-transactions.md](../../../bitcoin-multicast/docs/brc-134-anchor-transactions.md)
+for the anchor frame wire format.
 
 **Why one worker:** Linux delivers multicast datagrams to **every** socket in a
 `SO_REUSEPORT` group — there is no load balancing for multicast. Running multiple
@@ -136,6 +145,7 @@ interface (set via `-egress-iface`). On a cache hit it:
    - V2 (BRC-124/BRC-128): derives the shard group from the TxID via `shard.Engine`
    - V4 (BRC-131): retransmits to `CtrlGroupControl` (`FF0X::B:FFFE`)
    - V5 (BRC-132): retransmits to `CtrlGroupSubtreeAnnounce` (`FF0X::B:FFFB`)
+   - V6 (BRC-134 anchor): retransmits to `CtrlGroupControl` (`FF0X::B:FFFE`)
 2. Sends the raw frame bytes verbatim to the derived group address on each
    egress interface.
 
@@ -229,7 +239,7 @@ Protocol primitives are provided by
 
 ```
 bitcoin-shard-common/
-  frame/    BRC-12/BRC-124/BRC-128/BRC-131/BRC-132 wire format: Decode, Encode, constants
+  frame/    BRC-12/BRC-124/BRC-128/BRC-131/BRC-132/BRC-134 wire format: Decode, Encode, constants
   shard/    txid → group index → IPv6 multicast address derivation;
             control group constants and ControlGroupAddr
   seqhash/  XXH64 flow hash for HashKey computation
