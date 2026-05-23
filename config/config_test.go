@@ -53,6 +53,101 @@ func TestEnvFloat(t *testing.T) {
 	}
 }
 
+func TestResolveCacheTTLs(t *testing.T) {
+	cases := []struct {
+		name             string
+		cacheTTL         time.Duration // value of CacheTTL field
+		cacheTTLExplicit bool
+		txExplicit       bool
+		blockExplicit    bool
+		subtreeExplicit  bool
+		anchorExplicit   bool
+		// initial values mirror what envDuration would have set with
+		// differentiated defaults; resolveCacheTTLs may overwrite them.
+		initTx, initBlock, initSubtree, initAnchor time.Duration
+		wantTx, wantBlock, wantSubtree, wantAnchor time.Duration
+	}{
+		{
+			name:        "all defaults",
+			cacheTTL:    60 * time.Second,
+			initTx:      defaultCacheTTLTx,
+			initBlock:   defaultCacheTTLBlock,
+			initSubtree: defaultCacheTTLSubtree,
+			initAnchor:  defaultCacheTTLAnchor,
+			wantTx:      defaultCacheTTLTx,
+			wantBlock:   defaultCacheTTLBlock,
+			wantSubtree: defaultCacheTTLSubtree,
+			wantAnchor:  defaultCacheTTLAnchor,
+		},
+		{
+			name:             "only CACHE_TTL set collapses all four",
+			cacheTTL:         30 * time.Second,
+			cacheTTLExplicit: true,
+			initTx:           defaultCacheTTLTx,
+			initBlock:        defaultCacheTTLBlock,
+			initSubtree:      defaultCacheTTLSubtree,
+			initAnchor:       defaultCacheTTLAnchor,
+			wantTx:           30 * time.Second,
+			wantBlock:        30 * time.Second,
+			wantSubtree:      30 * time.Second,
+			wantAnchor:       30 * time.Second,
+		},
+		{
+			name:             "CACHE_TTL plus explicit block leaves block intact",
+			cacheTTL:         30 * time.Second,
+			cacheTTLExplicit: true,
+			blockExplicit:    true,
+			initTx:           defaultCacheTTLTx,
+			initBlock:        15 * time.Minute, // explicit override
+			initSubtree:      defaultCacheTTLSubtree,
+			initAnchor:       defaultCacheTTLAnchor,
+			wantTx:           30 * time.Second,
+			wantBlock:        15 * time.Minute,
+			wantSubtree:      30 * time.Second,
+			wantAnchor:       30 * time.Second,
+		},
+		{
+			name:        "only per-type set, no CACHE_TTL fallback",
+			cacheTTL:    60 * time.Second,
+			txExplicit:  true,
+			initTx:      7 * time.Second,
+			initBlock:   defaultCacheTTLBlock,
+			initSubtree: defaultCacheTTLSubtree,
+			initAnchor:  defaultCacheTTLAnchor,
+			wantTx:      7 * time.Second,
+			wantBlock:   defaultCacheTTLBlock,
+			wantSubtree: defaultCacheTTLSubtree,
+			wantAnchor:  defaultCacheTTLAnchor,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{
+				CacheTTL:        tc.cacheTTL,
+				CacheTTLTx:      tc.initTx,
+				CacheTTLBlock:   tc.initBlock,
+				CacheTTLSubtree: tc.initSubtree,
+				CacheTTLAnchor:  tc.initAnchor,
+			}
+			resolveCacheTTLs(c, tc.cacheTTLExplicit, tc.txExplicit, tc.blockExplicit, tc.subtreeExplicit, tc.anchorExplicit)
+
+			if c.CacheTTLTx != tc.wantTx {
+				t.Errorf("Tx = %s, want %s", c.CacheTTLTx, tc.wantTx)
+			}
+			if c.CacheTTLBlock != tc.wantBlock {
+				t.Errorf("Block = %s, want %s", c.CacheTTLBlock, tc.wantBlock)
+			}
+			if c.CacheTTLSubtree != tc.wantSubtree {
+				t.Errorf("Subtree = %s, want %s", c.CacheTTLSubtree, tc.wantSubtree)
+			}
+			if c.CacheTTLAnchor != tc.wantAnchor {
+				t.Errorf("Anchor = %s, want %s", c.CacheTTLAnchor, tc.wantAnchor)
+			}
+		})
+	}
+}
+
 func TestEnvDuration(t *testing.T) {
 	t.Setenv("CFG_D", "750ms")
 	if got := envDuration("CFG_D", time.Second); got != 750*time.Millisecond {

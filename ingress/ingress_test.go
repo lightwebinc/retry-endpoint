@@ -69,7 +69,12 @@ func buildRaw(t *testing.T, hashKey, seqNum uint64, payload []byte) []byte {
 func newTestWorker(mc *mockCache) *Worker {
 	return &Worker{
 		cache: mc,
-		ttl:   60 * time.Second,
+		ttls: TTLConfig{
+			Tx:      60 * time.Second,
+			Block:   10 * time.Minute,
+			Subtree: 5 * time.Minute,
+			Anchor:  2 * time.Minute,
+		},
 	}
 }
 
@@ -147,7 +152,7 @@ func TestProcessFrame_DecodeError(t *testing.T) {
 func TestProcessFrame_TTLPropagated(t *testing.T) {
 	mc := &mockCache{}
 	w := newTestWorker(mc)
-	w.ttl = 42 * time.Second
+	w.ttls.Tx = 42 * time.Second
 
 	raw := buildRaw(t, 0x1111111111111111, 0x22, nil)
 	w.processFrame(raw)
@@ -157,5 +162,61 @@ func TestProcessFrame_TTLPropagated(t *testing.T) {
 	}
 	if mc.storeAt(0).ttl != 42*time.Second {
 		t.Errorf("Store TTL = %v, want 42s", mc.storeAt(0).ttl)
+	}
+}
+
+// buildRawVer constructs a 92-byte-header datagram for an arbitrary FrameVer.
+// Layout for V2/V4/V5/V6 is identical: HashKey @40 (8B), SeqNum @48 (8B),
+// PayLen @88 (4B). MsgType at byte[7] is left as 0x00 which is valid for
+// V4/V5 default-msg paths (DecodeBlock / DecodeSubtreeData accept any byte).
+func buildRawVer(ver byte, hashKey, seqNum uint64) []byte {
+	buf := make([]byte, frame.HeaderSize)
+	binary.BigEndian.PutUint32(buf[0:4], frame.MagicBSV)
+	binary.BigEndian.PutUint16(buf[4:6], frame.ProtoVer)
+	buf[6] = ver
+	buf[7] = 0x00
+	// TxID/ContentID/SubtreeID at [8:40] — leave zeros, set first byte for variety
+	buf[8] = 0xAB
+	binary.BigEndian.PutUint64(buf[40:48], hashKey)
+	binary.BigEndian.PutUint64(buf[48:56], seqNum)
+	binary.BigEndian.PutUint32(buf[88:92], 0)
+	return buf
+}
+
+func TestProcessFrame_PerVersionTTL(t *testing.T) {
+	cases := []struct {
+		name string
+		ver  byte
+		ttl  time.Duration
+		set  func(*Worker, time.Duration)
+	}{
+		{"tx (V2)", frame.FrameVerV2, 11 * time.Second, func(w *Worker, d time.Duration) { w.ttls.Tx = d }},
+		{"block (V4)", frame.FrameVerV4, 22 * time.Second, func(w *Worker, d time.Duration) { w.ttls.Block = d }},
+		{"subtree (V5)", frame.FrameVerV5, 33 * time.Second, func(w *Worker, d time.Duration) { w.ttls.Subtree = d }},
+		{"anchor (V6)", frame.FrameVerV6, 44 * time.Second, func(w *Worker, d time.Duration) { w.ttls.Anchor = d }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := &mockCache{}
+			w := newTestWorker(mc)
+			tc.set(w, tc.ttl)
+
+			raw := buildRawVer(tc.ver, 0xDEADBEEFCAFEBABE, 0x42)
+			// V4 (block) and V5 (subtree) require a non-zero, valid
+			// MsgType byte at offset 7. 0x01 = BlockMsgAnnounce /
+			// SubtreeMsgHashesOnly.
+			if tc.ver == frame.FrameVerV4 || tc.ver == frame.FrameVerV5 {
+				raw[7] = 0x01
+			}
+			w.processFrame(raw)
+
+			if mc.storeCount() != 1 {
+				t.Fatalf("expected 1 Store call, got %d", mc.storeCount())
+			}
+			if got := mc.storeAt(0).ttl; got != tc.ttl {
+				t.Errorf("Store TTL = %v, want %v", got, tc.ttl)
+			}
+		})
 	}
 }

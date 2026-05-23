@@ -15,6 +15,18 @@ import (
 	"time"
 )
 
+// Differentiated default TTLs per FrameVer. These mirror the typical
+// retransmit-window expectations for each frame type and are overridden
+// by either an explicit semantic flag/env (CACHE_TTL_TX, CACHE_TTL_BLOCK,
+// CACHE_TTL_SUBTREE, CACHE_TTL_ANCHOR) or, as a fallback, by an explicit
+// CACHE_TTL value (which collapses all four to the same TTL).
+const (
+	defaultCacheTTLTx      = 60 * time.Second // BRC-124/128 regular tx
+	defaultCacheTTLBlock   = 10 * time.Minute // BRC-131 block control
+	defaultCacheTTLSubtree = 5 * time.Minute  // BRC-132 subtree data
+	defaultCacheTTLAnchor  = 2 * time.Minute  // BRC-134 anchor tx
+)
+
 // Scopes maps a human-readable scope name to the two-byte big-endian IPv6
 // multicast prefix. See RFC 4291 §2.7.
 var Scopes = map[string]uint16{
@@ -40,6 +52,15 @@ type Config struct {
 	RedisAddr    string // Redis server address (e.g., "localhost:6379")
 	CacheTTL     time.Duration
 	CacheMaxKeys int // Maximum number of keys in cache (0 = no limit)
+
+	// Per-FrameVer TTLs. Resolution order applied in Load():
+	//   1. explicit semantic flag/env (e.g. CACHE_TTL_TX) — wins
+	//   2. else, explicit CACHE_TTL — overrides differentiated default
+	//   3. else, differentiated default below
+	CacheTTLTx      time.Duration // FrameVer V2 (BRC-124/128 regular tx)
+	CacheTTLBlock   time.Duration // FrameVer V4 (BRC-131 block control)
+	CacheTTLSubtree time.Duration // FrameVer V5 (BRC-132 subtree data)
+	CacheTTLAnchor  time.Duration // FrameVer V6 (BRC-134 anchor tx)
 
 	// Server (NACK receive)
 	NACKPort    int // NACK listen port (default 9300)
@@ -109,7 +130,15 @@ func Load() (*Config, error) {
 	flag.StringVar(&c.RedisAddr, "redis-addr", envStr("REDIS_ADDR", ""),
 		"Redis server address (required when cache-backend=redis; also enables cross-instance dedup when cache-backend=memory)")
 	flag.DurationVar(&c.CacheTTL, "cache-ttl", envDuration("CACHE_TTL", 60*time.Second),
-		"cache TTL for frames")
+		"cache TTL for frames (fallback default for any per-FrameVer TTL not explicitly set)")
+	flag.DurationVar(&c.CacheTTLTx, "cache-ttl-tx", envDuration("CACHE_TTL_TX", defaultCacheTTLTx),
+		"cache TTL for regular tx frames (BRC-124/128, FrameVer V2)")
+	flag.DurationVar(&c.CacheTTLBlock, "cache-ttl-block", envDuration("CACHE_TTL_BLOCK", defaultCacheTTLBlock),
+		"cache TTL for block control frames (BRC-131, FrameVer V4)")
+	flag.DurationVar(&c.CacheTTLSubtree, "cache-ttl-subtree", envDuration("CACHE_TTL_SUBTREE", defaultCacheTTLSubtree),
+		"cache TTL for subtree data frames (BRC-132, FrameVer V5)")
+	flag.DurationVar(&c.CacheTTLAnchor, "cache-ttl-anchor", envDuration("CACHE_TTL_ANCHOR", defaultCacheTTLAnchor),
+		"cache TTL for anchor tx frames (BRC-134, FrameVer V6)")
 	flag.IntVar(&c.CacheMaxKeys, "cache-max-keys", envInt("CACHE_MAX_KEYS", 0),
 		"maximum number of keys in cache (0 = no limit)")
 
@@ -199,6 +228,33 @@ func Load() (*Config, error) {
 
 	flag.Parse()
 
+	// Resolve per-FrameVer cache TTLs.
+	//
+	// Detect explicit-ness via env presence (already applied to defaults
+	// above) plus flag.Visit (CLI overrides). For any per-FrameVer TTL not
+	// explicitly set, fall back to CACHE_TTL when the operator set it
+	// explicitly; otherwise keep the differentiated default.
+	cacheTTLExplicit := os.Getenv("CACHE_TTL") != ""
+	ttlTxExplicit := os.Getenv("CACHE_TTL_TX") != ""
+	ttlBlockExplicit := os.Getenv("CACHE_TTL_BLOCK") != ""
+	ttlSubtreeExplicit := os.Getenv("CACHE_TTL_SUBTREE") != ""
+	ttlAnchorExplicit := os.Getenv("CACHE_TTL_ANCHOR") != ""
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "cache-ttl":
+			cacheTTLExplicit = true
+		case "cache-ttl-tx":
+			ttlTxExplicit = true
+		case "cache-ttl-block":
+			ttlBlockExplicit = true
+		case "cache-ttl-subtree":
+			ttlSubtreeExplicit = true
+		case "cache-ttl-anchor":
+			ttlAnchorExplicit = true
+		}
+	})
+	resolveCacheTTLs(c, cacheTTLExplicit, ttlTxExplicit, ttlBlockExplicit, ttlSubtreeExplicit, ttlAnchorExplicit)
+
 	c.BeaconTier = *beaconTier
 	c.BeaconPreference = *beaconPref
 
@@ -228,6 +284,18 @@ func Load() (*Config, error) {
 	// Validate cache backend.
 	if c.CacheBackend != "redis" && c.CacheBackend != "memory" {
 		return nil, fmt.Errorf("cache-backend must be 'redis' or 'memory', got %q", c.CacheBackend)
+	}
+
+	// Validate per-FrameVer TTLs.
+	for name, ttl := range map[string]time.Duration{
+		"cache-ttl-tx":      c.CacheTTLTx,
+		"cache-ttl-block":   c.CacheTTLBlock,
+		"cache-ttl-subtree": c.CacheTTLSubtree,
+		"cache-ttl-anchor":  c.CacheTTLAnchor,
+	} {
+		if ttl <= 0 {
+			return nil, fmt.Errorf("%s must be > 0, got %s", name, ttl)
+		}
 	}
 
 	// Ingress is always single worker (SO_REUSEPORT multicast duplication).
@@ -283,6 +351,29 @@ func Load() (*Config, error) {
 	}
 
 	return c, nil
+}
+
+// resolveCacheTTLs applies the per-FrameVer TTL fallback rule:
+// for any per-type TTL that was not explicitly set by the operator,
+// substitute CacheTTL when the operator set it explicitly. The
+// differentiated defaults from envDuration remain in place when neither
+// the per-type knob nor CACHE_TTL was set.
+func resolveCacheTTLs(c *Config, cacheTTLExplicit, txExplicit, blockExplicit, subtreeExplicit, anchorExplicit bool) {
+	if !cacheTTLExplicit {
+		return
+	}
+	if !txExplicit {
+		c.CacheTTLTx = c.CacheTTL
+	}
+	if !blockExplicit {
+		c.CacheTTLBlock = c.CacheTTL
+	}
+	if !subtreeExplicit {
+		c.CacheTTLSubtree = c.CacheTTL
+	}
+	if !anchorExplicit {
+		c.CacheTTLAnchor = c.CacheTTL
+	}
 }
 
 func envStr(key, def string) string {

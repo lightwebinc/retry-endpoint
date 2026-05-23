@@ -90,8 +90,34 @@ deduplication becomes cross-instance.
 
 ### `-cache-ttl` / `CACHE_TTL` (default: `60s`)
 
-TTL for cached frames. Frames expire from the cache after this duration.
-Listeners' `-nack-gap-ttl` should be shorter than this value.
+Global fallback TTL for cached frames. Acts as the default for any
+per-FrameVer TTL that is not set explicitly. If you set `CACHE_TTL=30s`
+and leave the per-type knobs untouched, all frame types collapse to 30s.
+Listeners' `-nack-gap-ttl` should be shorter than the smallest effective
+TTL.
+
+### Per-FrameVer TTLs
+
+Differentiated TTLs per frame type. Each one defaults to a value tuned
+for the typical retransmit window for its frame family. When unset,
+they fall back to `CACHE_TTL` (if explicitly set), otherwise to the
+listed default.
+
+| Flag / env | FrameVer | BRC | Default |
+|---|---|---|---|
+| `-cache-ttl-tx` / `CACHE_TTL_TX` | `0x02` | BRC-124 / BRC-128 regular tx | `60s` |
+| `-cache-ttl-block` / `CACHE_TTL_BLOCK` | `0x04` | BRC-131 block control | `10m` |
+| `-cache-ttl-subtree` / `CACHE_TTL_SUBTREE` | `0x05` | BRC-132 subtree data | `5m` |
+| `-cache-ttl-anchor` / `CACHE_TTL_ANCHOR` | `0x06` | BRC-134 anchor tx | `2m` |
+
+Resolution order applied per frame type:
+
+1. explicit per-FrameVer flag/env (e.g. `CACHE_TTL_BLOCK=15m`) — wins
+2. else, explicit `CACHE_TTL` — overrides the differentiated default
+3. else, the differentiated default above
+
+All four values must be strictly positive; the process exits at startup
+if any resolves to zero or a negative duration.
 
 ### `-cache-max-keys` / `CACHE_MAX_KEYS` (default: `0`)
 

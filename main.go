@@ -207,7 +207,12 @@ func run() error {
 	srv.SetShardEngine(engine)
 
 	// Build ingress worker.
-	ing := ingress.New(mcIface, cfg.ListenPort, groups, c, rec, cfg.CacheTTL, cfg.Debug)
+	ing := ingress.New(mcIface, cfg.ListenPort, groups, c, rec, ingress.TTLConfig{
+		Tx:      cfg.CacheTTLTx,
+		Block:   cfg.CacheTTLBlock,
+		Subtree: cfg.CacheTTLSubtree,
+		Anchor:  cfg.CacheTTLAnchor,
+	}, cfg.Debug)
 
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())

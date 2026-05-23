@@ -40,6 +40,16 @@ const (
 	socketRecvBuf = 64 * 1024 * 1024 // 64 MiB
 )
 
+// TTLConfig configures per-FrameVer cache TTLs applied by the ingress
+// worker. Each field corresponds to a frame type the retry endpoint may
+// cache; values must be strictly positive.
+type TTLConfig struct {
+	Tx      time.Duration // FrameVer V2 (BRC-124/128 regular tx)
+	Block   time.Duration // FrameVer V4 (BRC-131 block control)
+	Subtree time.Duration // FrameVer V5 (BRC-132 subtree data)
+	Anchor  time.Duration // FrameVer V6 (BRC-134 anchor tx)
+}
+
 // Worker is the single multicast receive goroutine.
 type Worker struct {
 	iface  *net.Interface
@@ -47,7 +57,7 @@ type Worker struct {
 	groups []*net.UDPAddr
 	cache  cache.Cache
 	rec    *metrics.Recorder
-	ttl    time.Duration
+	ttls   TTLConfig
 	debug  bool
 	log    *slog.Logger
 }
@@ -59,7 +69,7 @@ func New(
 	groups []*net.UDPAddr,
 	cache cache.Cache,
 	rec *metrics.Recorder,
-	ttl time.Duration,
+	ttls TTLConfig,
 	debug bool,
 ) *Worker {
 	return &Worker{
@@ -68,7 +78,7 @@ func New(
 		groups: groups,
 		cache:  cache,
 		rec:    rec,
-		ttl:    ttl,
+		ttls:   ttls,
 		debug:  debug,
 		log:    slog.Default().With("component", "ingress"),
 	}
@@ -179,7 +189,7 @@ func (w *Worker) processFrame(raw []byte) {
 	var key [16]byte
 	binary.BigEndian.PutUint64(key[0:8], f.HashKey)
 	binary.BigEndian.PutUint64(key[8:16], f.SeqNum)
-	if err := w.cache.Store(key[:], raw, w.ttl); err != nil {
+	if err := w.cache.Store(key[:], raw, w.ttls.Tx); err != nil {
 		if w.rec != nil {
 			w.rec.CacheError()
 		}
@@ -225,7 +235,7 @@ func (w *Worker) processBlockFrame(raw []byte) {
 	var key [16]byte
 	binary.BigEndian.PutUint64(key[0:8], bf.HashKey)
 	binary.BigEndian.PutUint64(key[8:16], bf.SeqNum)
-	if err := w.cache.Store(key[:], raw, w.ttl); err != nil {
+	if err := w.cache.Store(key[:], raw, w.ttls.Block); err != nil {
 		if w.rec != nil {
 			w.rec.CacheError()
 		}
@@ -272,7 +282,7 @@ func (w *Worker) processSubtreeDataFrame(raw []byte) {
 	var key [16]byte
 	binary.BigEndian.PutUint64(key[0:8], sf.HashKey)
 	binary.BigEndian.PutUint64(key[8:16], sf.SeqNum)
-	if err := w.cache.Store(key[:], raw, w.ttl); err != nil {
+	if err := w.cache.Store(key[:], raw, w.ttls.Subtree); err != nil {
 		if w.rec != nil {
 			w.rec.CacheError()
 		}
@@ -319,7 +329,7 @@ func (w *Worker) processAnchorFrame(raw []byte) {
 	var key [16]byte
 	binary.BigEndian.PutUint64(key[0:8], af.HashKey)
 	binary.BigEndian.PutUint64(key[8:16], af.SeqNum)
-	if err := w.cache.Store(key[:], raw, w.ttl); err != nil {
+	if err := w.cache.Store(key[:], raw, w.ttls.Anchor); err != nil {
 		if w.rec != nil {
 			w.rec.CacheError()
 		}

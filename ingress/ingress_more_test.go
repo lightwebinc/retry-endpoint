@@ -10,12 +10,13 @@ import (
 
 func TestNew_Construction(t *testing.T) {
 	mc := &mockCache{}
-	w := New(&net.Interface{Index: 1, Name: "lo"}, 9001, nil, mc, nil, 30*time.Second, true)
+	ttls := TTLConfig{Tx: 30 * time.Second, Block: 31 * time.Second, Subtree: 32 * time.Second, Anchor: 33 * time.Second}
+	w := New(&net.Interface{Index: 1, Name: "lo"}, 9001, nil, mc, nil, ttls, true)
 	if w.port != 9001 {
 		t.Errorf("port=%d", w.port)
 	}
-	if w.ttl != 30*time.Second {
-		t.Errorf("ttl=%v", w.ttl)
+	if w.ttls != ttls {
+		t.Errorf("ttls=%+v, want %+v", w.ttls, ttls)
 	}
 	if !w.debug {
 		t.Error("debug not preserved")
@@ -29,7 +30,7 @@ func (e *errCache) Store(_, _ []byte, _ time.Duration) error {
 }
 
 func TestProcessFrame_PrimaryStoreError(t *testing.T) {
-	w := New(&net.Interface{Name: "lo"}, 0, nil, &errCache{}, nil, time.Minute, false)
+	w := New(&net.Interface{Name: "lo"}, 0, nil, &errCache{}, nil, TTLConfig{Tx: time.Minute, Block: time.Minute, Subtree: time.Minute, Anchor: time.Minute}, false)
 	raw := buildRaw(t, 0x1111111111111111, 0x22, nil)
 	w.processFrame(raw) // must not panic; just logs
 }
@@ -56,7 +57,7 @@ func TestRun_CtxCancelExits(t *testing.T) {
 		t.Skip("no loopback")
 	}
 
-	w := New(iface, port, nil, &mockCache{}, nil, time.Minute, false)
+	w := New(iface, port, nil, &mockCache{}, nil, TTLConfig{Tx: time.Minute, Block: time.Minute, Subtree: time.Minute, Anchor: time.Minute}, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- w.Run(ctx) }()
