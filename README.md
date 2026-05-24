@@ -71,6 +71,32 @@ go build -o bitcoin-retry-endpoint .
 
 See [docs/configuration.md](docs/configuration.md) for all flags and environment variable equivalents.
 
+## NACK_ADDR (required in production)
+
+`NACK_ADDR` (or `--nack-addr`) **must** be set to the specific routable IPv6
+address that this endpoint advertises in beacons and that listeners send NACKs
+to.
+
+If left empty the kernel binds the NACK socket to `[::]` and the default
+source-address selection rules may pick a SLAAC address (e.g.
+`fd20::216:3eff:fe4c:8a01`) for outgoing ACK responses. Listeners then either:
+
+- discard the ACK because they use a connected socket bound to the advertised
+  address (the SLAAC source does not match), or
+- drop the ACK at the firewall because the allow-list only contains the
+  advertised address.
+
+Either path silently breaks NACK recovery. See
+[`bitcoin-shard-listener/nack/nack.go`](https://github.com/lightwebinc/bitcoin-shard-listener/blob/main/nack/nack.go)
+and the SLAAC source-address-mismatch fix history.
+
+## Container image
+
+The Dockerfile produces a `gcr.io/distroless/static:nonroot` image with a
+single static binary at `/usr/local/bin/bitcoin-retry-endpoint`. No in-image
+`ENV` defaults are set; configure via Helm `values.yaml` or container
+environment variables / CLI flags.
+
 ## Helm chart
 
 A Kubernetes Helm chart is published from a dedicated chart repository:

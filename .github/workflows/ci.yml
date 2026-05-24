@@ -10,8 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: build
+  ci:
+    name: ci (dagger)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -26,101 +26,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: bitcoin-retry-endpoint/go.mod
+          cache: false
 
-      - name: Use local bitcoin-shard-common
+      - name: Run Dagger pipeline
         working-directory: bitcoin-retry-endpoint
-        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
-
-      - name: go mod tidy check
-        working-directory: bitcoin-retry-endpoint
-        run: |
-          go mod tidy
-          go mod edit -dropreplace github.com/lightwebinc/bitcoin-shard-common
-          git diff --exit-code go.mod
-          go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
-
-      - name: Build
-        working-directory: bitcoin-retry-endpoint
-        run: go build -buildvcs=false ./...
-
-  security:
-    name: security
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: bitcoin-retry-endpoint
-
-      - uses: actions/checkout@v6
-        with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: bitcoin-retry-endpoint/go.mod
-
-      - name: Use local bitcoin-shard-common
-        working-directory: bitcoin-retry-endpoint
-        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
-
-      - name: govulncheck
-        working-directory: bitcoin-retry-endpoint
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
-
-  lint:
-    name: lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: bitcoin-retry-endpoint
-
-      - uses: actions/checkout@v6
-        with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: bitcoin-retry-endpoint/go.mod
-
-      - name: Use local bitcoin-shard-common
-        working-directory: bitcoin-retry-endpoint
-        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
-
-      - name: go vet
-        working-directory: bitcoin-retry-endpoint
-        run: go vet ./...
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
-        with:
-          working-directory: bitcoin-retry-endpoint
-
-  test:
-    name: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: bitcoin-retry-endpoint
-
-      - uses: actions/checkout@v6
-        with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: bitcoin-retry-endpoint/go.mod
-
-      - name: Use local bitcoin-shard-common
-        working-directory: bitcoin-retry-endpoint
-        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
-
-      - name: Unit tests
-        working-directory: bitcoin-retry-endpoint
-        run: go test -race ./...
+        env:
+          GOWORK: "off"
+        run: make ci
