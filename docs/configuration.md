@@ -422,3 +422,9 @@ bitcoin-retry-endpoint \
   -cache-backend redis \
   -redis-addr redis.local:6379
 ```
+
+## Helm chart
+
+Every flag documented in this file is exposed under `.config` in the corresponding Helm chart's `values.yaml`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
+
+Chart: [`lightwebinc/bitcoin-retry-endpoint-helm`](https://github.com/lightwebinc/bitcoin-retry-endpoint-helm) — `config.nackAddr` is effectively required; no Redis subchart bundled.

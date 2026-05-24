@@ -71,6 +71,21 @@ go build -o bitcoin-retry-endpoint .
 
 See [docs/configuration.md](docs/configuration.md) for all flags and environment variable equivalents.
 
+## Helm chart
+
+A Kubernetes Helm chart is published from a dedicated chart repository:
+
+- Repository: [`lightwebinc/bitcoin-retry-endpoint-helm`](https://github.com/lightwebinc/bitcoin-retry-endpoint-helm)
+- HTTPS:
+  ```
+  helm repo add bre https://lightwebinc.github.io/bitcoin-retry-endpoint-helm
+  helm install retry-node-1 bre/bitcoin-retry-endpoint \
+    --set config.nackAddr=fd20::24
+  ```
+- OCI: `helm install retry-node-1 oci://ghcr.io/lightwebinc/charts/bitcoin-retry-endpoint --version 0.1.0`
+
+`config.nackAddr` is effectively required — the chart emits a `helm.sh/chart-warnings` annotation when empty. The chart does **not** bundle a Redis subchart; operators install Redis separately when `config.cacheBackend=redis`. See the chart README for the full reference.
+
 ## License
 
 See LICENSE file.
