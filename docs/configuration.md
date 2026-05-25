@@ -37,7 +37,7 @@ Default `0x000B` corresponds to the IANA-assigned Bitcoin allocation
 
 ## Sharding
 
-### `-shard-bits` / `SHARD_BITS` (default: `8`)
+### `-shard-bits` / `SHARD_BITS` (default: `2`)
 
 Txid prefix bit width used as the shard key. Must exactly match the proxy's
 `-shard-bits`. Determines how many multicast groups the endpoint joins (2ᴺ).
@@ -45,6 +45,7 @@ Txid prefix bit width used as the shard key. Must exactly match the proxy's
 | Bits | Groups                                                 |
 | ---- | ------------------------------------------------------ |
 | 1    | 2                                                      |
+| 2    | 4 (default)                                            |
 | 8    | 256                                                    |
 | 12   | 4 096                                                  |
 | 15   | 32 768 (max; top of 16-bit space reserved for control) |
@@ -371,7 +372,7 @@ Metric export interval for the OTLP push exporter. Ignored when
 bitcoin-retry-endpoint \
   -mc-iface eth0 \
   -egress-iface eth0 \
-  -shard-bits 16 \
+  -shard-bits 2 \
   -cache-backend memory \
   -cache-ttl 60s
 ```
@@ -400,7 +401,7 @@ bitcoin-retry-endpoint \
 bitcoin-retry-endpoint \
   -mc-iface enp6s0 \
   -egress-iface enp6s0 \
-  -shard-bits 16 \
+  -shard-bits 2 \
   -cache-backend redis \
   -redis-addr redis.local:6379 \
   -nack-addr fd20::24 \
@@ -415,7 +416,7 @@ bitcoin-retry-endpoint \
 bitcoin-retry-endpoint \
   -mc-iface eth0 \
   -egress-iface eth0 \
-  -shard-bits 16 \
+  -shard-bits 2 \
   -beacon-tier 1 \
   -beacon-preference 128 \
   -beacon-scope global \

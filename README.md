@@ -57,13 +57,13 @@ go build -o bitcoin-retry-endpoint .
 ./bitcoin-retry-endpoint \
   -mc-iface eth0 \
   -egress-iface eth0 \
-  -shard-bits 16
+  -shard-bits 2
 
 # Redis cache (multi-node with cross-instance dedup)
 ./bitcoin-retry-endpoint \
   -mc-iface enp6s0 \
   -egress-iface enp6s0 \
-  -shard-bits 16 \
+  -shard-bits 2 \
   -cache-backend redis \
   -redis-addr redis.local:6379 \
   -nack-addr fd20::24

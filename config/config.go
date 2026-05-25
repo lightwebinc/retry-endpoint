@@ -196,7 +196,7 @@ func Load() (*Config, error) {
 	otlpInterval := flag.Duration("otlp-interval", envDuration("OTLP_INTERVAL", 30*time.Second),
 		"OTLP push interval")
 
-	shardBitsDefault := uint(envInt("SHARD_BITS", 8))
+	shardBitsDefault := uint(envInt("SHARD_BITS", 2))
 	bits := flag.Uint("shard-bits", shardBitsDefault,
 		"txid prefix bit width used as the shard key (1–15)")
 
