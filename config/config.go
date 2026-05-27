@@ -1,5 +1,5 @@
 // Package config loads and validates runtime configuration for
-// bitcoin-retry-endpoint. Parameters are accepted from CLI flags first;
+// retry-endpoint. Parameters are accepted from CLI flags first;
 // environment variables serve as fallbacks; hard-coded defaults apply when
 // neither is present.
 package config

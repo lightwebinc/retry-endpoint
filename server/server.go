@@ -1,4 +1,4 @@
-// Package server implements the UDP NACK receiver for bitcoin-retry-endpoint.
+// Package server implements the UDP NACK receiver for retry-endpoint.
 package server
 
 import (

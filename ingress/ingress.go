@@ -1,5 +1,5 @@
 // Package ingress implements the multicast receive worker for
-// bitcoin-retry-endpoint.
+// retry-endpoint.
 //
 // # Worker model
 //

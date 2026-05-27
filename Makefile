@@ -1,8 +1,8 @@
-BINARY  := bitcoin-retry-endpoint
+BINARY  := retry-endpoint
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 TAG     ?= $(VERSION)
 IMAGE   ?= ghcr.io/lightwebinc/$(BINARY)
-COMMON  ?= ../bitcoin-shard-common
+COMMON  ?= ../shard-common
 
 DAGGER_RUN := GOWORK=off go run .
 

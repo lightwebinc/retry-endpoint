@@ -1,4 +1,4 @@
-// Command bitcoin-retry-endpoint caches multicast BSV transaction frames
+// Command retry-endpoint caches multicast BSV transaction frames
 // and retransmits them on demand via NACK requests.
 package main
 
@@ -92,7 +92,7 @@ func run() error {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
 
-	slog.Info("bitcoin-retry-endpoint starting",
+	slog.Info("retry-endpoint starting",
 		"shard_bits", cfg.ShardBits,
 		"num_groups", cfg.NumGroups,
 		"scope", cfg.MCScope,

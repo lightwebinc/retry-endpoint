@@ -1,8 +1,8 @@
-# bitcoin-retry-endpoint — Architecture
+# retry-endpoint — Architecture
 
 ## Overview
 
-`bitcoin-retry-endpoint` sits alongside `bitcoin-shard-listener` on the multicast
+`retry-endpoint` sits alongside `shard-listener` on the multicast
 fabric. It joins all shard groups plus `CtrlGroupControl` (BRC-131 / BRC-134) and optionally
 `CtrlGroupSubtreeAnnounce` (BRC-132), caches every frame it receives, and serves
 unicast NACK requests from listeners that detect sequence gaps.
@@ -10,7 +10,7 @@ unicast NACK requests from listeners that detect sequence gaps.
 Foundational concepts (shard hierarchy, frame versions, NACK semantics) live in
 [multicast-skills/architecture.md](../../../multicast-skills/architecture.md) and
 [multicast-skills/protocol.md](../../../multicast-skills/protocol.md); BRC wire formats in
-[bitcoin-multicast/docs/](../../../bitcoin-multicast/docs/). On a cache hit it
+[bsv-multicast/docs/](../../../bsv-multicast/docs/). On a cache hit it
 retransmits the frame via multicast egress and/or directly to the requesting listener
 via unicast, then sends an ACK response. On a miss it sends a MISS response so the
 listener can escalate immediately to the next endpoint.
@@ -23,12 +23,12 @@ priority-sorted registry without static configuration (BRC-126).
 BSV senders
    │
    ▼
-bitcoin-shard-proxy  ──UDP multicast──▶ FF05::<shard>:9001
+shard-proxy  ──UDP multicast──▶ FF05::<shard>:9001
                                               │
               ┌───────────────────────────────┤
               │                               │
               ▼                               ▼
-bitcoin-shard-listener              bitcoin-retry-endpoint
+shard-listener              retry-endpoint
 (gap detected → NACK)  ──UDP──▶  [nack-addr]:9300
               │                        │ lookup cache
               │                        ├─ HIT  → retransmit (multicast and/or unicast) + ACK
@@ -50,7 +50,7 @@ key is frame-version-agnostic: `HashKey (8B) ∥ SeqNum (8B)` → raw frame byte
 frame type, so BRC-131, BRC-132, and BRC-134 frames are served on NACK request with the same
 lookup path as BRC-124/BRC-128 frames.
 
-See [bitcoin-multicast/docs/brc-134-anchor-transactions.md](../../../bitcoin-multicast/docs/brc-134-anchor-transactions.md)
+See [bsv-multicast/docs/brc-134-anchor-transactions.md](../../../bsv-multicast/docs/brc-134-anchor-transactions.md)
 for the anchor frame wire format.
 
 **Why one worker:** Linux delivers multicast datagrams to **every** socket in a
@@ -222,7 +222,7 @@ On `SIGINT` or `SIGTERM`:
 ## Package structure
 
 ```
-bitcoin-retry-endpoint/
+retry-endpoint/
   main.go          entry point; wires config → cache → ingress → server → beacon
   config/          runtime configuration (flags + env vars + validation)
   ingress/         single-worker multicast receive loop; writes to cache
@@ -235,10 +235,10 @@ bitcoin-retry-endpoint/
 ```
 
 Protocol primitives are provided by
-[`github.com/lightwebinc/bitcoin-shard-common`](https://github.com/lightwebinc/bitcoin-shard-common):
+[`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common):
 
 ```
-bitcoin-shard-common/
+shard-common/
   frame/    BRC-12/BRC-124/BRC-128/BRC-131/BRC-132/BRC-134 wire format: Decode, Encode, constants
   shard/    txid → group index → IPv6 multicast address derivation;
             control group constants and ControlGroupAddr

@@ -1,4 +1,4 @@
-// Package beacon implements the ADVERT beacon sender for bitcoin-retry-endpoint.
+// Package beacon implements the ADVERT beacon sender for retry-endpoint.
 // It periodically multicasts 56-byte ADVERT datagrams to site-local and/or
 // global beacon groups so that listeners can discover this endpoint dynamically.
 package beacon

@@ -1,4 +1,4 @@
-# bitcoin-retry-endpoint — Configuration Reference
+# retry-endpoint — Configuration Reference
 
 All parameters are accepted as CLI flags. Environment variables serve as
 fallbacks; hard-coded defaults apply when neither is present.
@@ -58,7 +58,7 @@ Enable BRC-132 subtree data caching. When `true`, the ingress worker joins
 `HashKey ∥ SeqNum` key and served on NACK request. The retransmitter routes BRC-132 frames
 back to `CtrlGroupSubtreeAnnounce` on cache hit.
 
-Set this flag when any downstream `bitcoin-shard-listener` has `-subtree-data-enabled=true`
+Set this flag when any downstream `shard-listener` has `-subtree-data-enabled=true`
 and relies on NACK-based retransmission for subtree data fragments.
 
 ---
@@ -253,7 +253,7 @@ from the frame TxID using the same `shard.Engine` as the multicast egress path
 
 Periodically multicast a 56-byte ADVERT datagram to the beacon group so
 listeners can discover this endpoint dynamically. See [BRC-126 — Retransmission
-Protocol](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/brc-126-retransmission-protocol.md).
+Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md).
 
 When `false`, the endpoint is reachable only via static `-retry-endpoints` seeds
 on listeners.
@@ -369,7 +369,7 @@ Metric export interval for the OTLP push exporter. Ignored when
 ## Example: in-memory cache, single NIC
 
 ```bash
-bitcoin-retry-endpoint \
+retry-endpoint \
   -mc-iface eth0 \
   -egress-iface eth0 \
   -shard-bits 2 \
@@ -383,7 +383,7 @@ Frame cache stays per-instance (safe for scenario 13-style tests). Redis used
 only for `SET NX` retransmit deduplication across retry endpoints.
 
 ```bash
-bitcoin-retry-endpoint \
+retry-endpoint \
   -mc-iface enp6s0 \
   -egress-iface enp6s0 \
   -shard-bits 2 \
@@ -398,7 +398,7 @@ bitcoin-retry-endpoint \
 ## Example: Redis cache, multi-homed host
 
 ```bash
-bitcoin-retry-endpoint \
+retry-endpoint \
   -mc-iface enp6s0 \
   -egress-iface enp6s0 \
   -shard-bits 2 \
@@ -413,7 +413,7 @@ bitcoin-retry-endpoint \
 ## Example: tier-1 fallback endpoint (global beacon scope)
 
 ```bash
-bitcoin-retry-endpoint \
+retry-endpoint \
   -mc-iface eth0 \
   -egress-iface eth0 \
   -shard-bits 2 \
@@ -428,4 +428,4 @@ bitcoin-retry-endpoint \
 
 Every flag documented in this file is exposed under `.config` in the corresponding Helm chart's `values.yaml`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
 
-Chart: [`lightwebinc/bitcoin-retry-endpoint-helm`](https://github.com/lightwebinc/bitcoin-retry-endpoint-helm) — `config.nackAddr` is effectively required; no Redis subchart bundled.
+Chart: [`lightwebinc/retry-endpoint-helm`](https://github.com/lightwebinc/retry-endpoint-helm) — `config.nackAddr` is effectively required; no Redis subchart bundled.

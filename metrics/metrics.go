@@ -24,7 +24,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-const ServiceName = "bitcoin-retry-endpoint"
+const ServiceName = "retry-endpoint"
 
 var Version = "dev"
 
