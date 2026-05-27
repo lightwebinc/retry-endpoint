@@ -16,20 +16,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          path: bitcoin-retry-endpoint
+          path: retry-endpoint
 
       - uses: actions/checkout@v6
         with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
+          repository: lightwebinc/shard-common
+          path: shard-common
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: bitcoin-retry-endpoint/go.mod
+          go-version-file: retry-endpoint/go.mod
           cache: false
 
       - name: Run Dagger pipeline
-        working-directory: bitcoin-retry-endpoint
+        working-directory: retry-endpoint
         env:
           GOWORK: "off"
         run: make ci

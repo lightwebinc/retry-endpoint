@@ -1,4 +1,4 @@
-module github.com/lightwebinc/bitcoin-retry-endpoint/ci
+module github.com/lightwebinc/retry-endpoint/ci
 
 go 1.25.0
 

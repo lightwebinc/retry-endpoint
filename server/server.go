@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
-	"github.com/lightwebinc/bitcoin-shard-common/shard"
+	"github.com/lightwebinc/shard-common/frame"
+	"github.com/lightwebinc/shard-common/shard"
 
-	"github.com/lightwebinc/bitcoin-retry-endpoint/cache"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/metrics"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/ratelimit"
+	"github.com/lightwebinc/retry-endpoint/cache"
+	"github.com/lightwebinc/retry-endpoint/metrics"
+	"github.com/lightwebinc/retry-endpoint/ratelimit"
 )
 
 // NACKSize is the fixed size of a BRC-126 NACK datagram (64 bytes).

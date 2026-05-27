@@ -14,18 +14,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lightwebinc/bitcoin-shard-common/shard"
+	"github.com/lightwebinc/shard-common/shard"
 
-	"github.com/lightwebinc/bitcoin-retry-endpoint/beacon"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/cache"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/cache/memory"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/cache/redis"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/config"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/ingress"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/metrics"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/ratelimit"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/retransmit"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/server"
+	"github.com/lightwebinc/retry-endpoint/beacon"
+	"github.com/lightwebinc/retry-endpoint/cache"
+	"github.com/lightwebinc/retry-endpoint/cache/memory"
+	"github.com/lightwebinc/retry-endpoint/cache/redis"
+	"github.com/lightwebinc/retry-endpoint/config"
+	"github.com/lightwebinc/retry-endpoint/ingress"
+	"github.com/lightwebinc/retry-endpoint/metrics"
+	"github.com/lightwebinc/retry-endpoint/ratelimit"
+	"github.com/lightwebinc/retry-endpoint/retransmit"
+	"github.com/lightwebinc/retry-endpoint/server"
 )
 
 // hashInstanceID derives a 32-bit identifier for this endpoint from the

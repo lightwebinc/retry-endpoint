@@ -22,20 +22,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          path: bitcoin-retry-endpoint
+          path: retry-endpoint
 
       - uses: actions/checkout@v6
         with:
-          repository: lightwebinc/bitcoin-shard-common
-          path: bitcoin-shard-common
+          repository: lightwebinc/shard-common
+          path: shard-common
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: bitcoin-retry-endpoint/go.mod
+          go-version-file: retry-endpoint/go.mod
 
-      - name: Use local bitcoin-shard-common
-        working-directory: bitcoin-retry-endpoint
-        run: go mod edit -replace github.com/lightwebinc/bitcoin-shard-common=../bitcoin-shard-common
+      - name: Use local shard-common
+        working-directory: retry-endpoint
+        run: go mod edit -replace github.com/lightwebinc/shard-common=../shard-common
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -44,7 +44,7 @@ jobs:
           build-mode: manual
 
       - name: Build for CodeQL
-        working-directory: bitcoin-retry-endpoint
+        working-directory: retry-endpoint
         run: go build -buildvcs=false ./...
 
       - name: Perform CodeQL Analysis

@@ -7,9 +7,9 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
-	"github.com/lightwebinc/bitcoin-shard-common/shard"
+	"github.com/lightwebinc/shard-common/shard"
 
-	"github.com/lightwebinc/bitcoin-retry-endpoint/cache/redis"
+	"github.com/lightwebinc/retry-endpoint/cache/redis"
 )
 
 func TestNew(t *testing.T) {

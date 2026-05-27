@@ -10,11 +10,11 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
-	"github.com/lightwebinc/bitcoin-shard-common/shard"
+	"github.com/lightwebinc/shard-common/frame"
+	"github.com/lightwebinc/shard-common/shard"
 
-	"github.com/lightwebinc/bitcoin-retry-endpoint/cache/redis"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/metrics"
+	"github.com/lightwebinc/retry-endpoint/cache/redis"
+	"github.com/lightwebinc/retry-endpoint/metrics"
 )
 
 // Retransmitter handles retransmitting cached frames.

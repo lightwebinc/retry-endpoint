@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lightwebinc/bitcoin-retry-endpoint/metrics"
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
-	"github.com/lightwebinc/bitcoin-shard-common/shard"
+	"github.com/lightwebinc/retry-endpoint/metrics"
+	"github.com/lightwebinc/shard-common/frame"
+	"github.com/lightwebinc/shard-common/shard"
 )
 
 // ADVERTSize is the fixed size of an ADVERT beacon datagram.

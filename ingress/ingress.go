@@ -29,10 +29,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
+	"github.com/lightwebinc/shard-common/frame"
 
-	"github.com/lightwebinc/bitcoin-retry-endpoint/cache"
-	"github.com/lightwebinc/bitcoin-retry-endpoint/metrics"
+	"github.com/lightwebinc/retry-endpoint/cache"
+	"github.com/lightwebinc/retry-endpoint/metrics"
 )
 
 const (

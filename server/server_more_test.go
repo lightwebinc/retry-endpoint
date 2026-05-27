@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lightwebinc/bitcoin-retry-endpoint/ratelimit"
-	"github.com/lightwebinc/bitcoin-shard-common/frame"
+	"github.com/lightwebinc/retry-endpoint/ratelimit"
+	"github.com/lightwebinc/shard-common/frame"
 )
 
 func TestProcessNACK_IPRateLimit_DropsRequest(t *testing.T) {
