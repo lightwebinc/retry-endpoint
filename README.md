@@ -1,23 +1,23 @@
-# bitcoin-retry-endpoint
+# retry-endpoint
 
-[![CI](https://github.com/lightwebinc/bitcoin-retry-endpoint/actions/workflows/ci.yml/badge.svg)](https://github.com/lightwebinc/bitcoin-retry-endpoint/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/lightwebinc/bitcoin-retry-endpoint/actions/workflows/codeql.yml/badge.svg)](https://github.com/lightwebinc/bitcoin-retry-endpoint/actions/workflows/codeql.yml)
-[![Release](https://img.shields.io/github/v/release/lightwebinc/bitcoin-retry-endpoint)](https://github.com/lightwebinc/bitcoin-retry-endpoint/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/lightwebinc/bitcoin-retry-endpoint.svg)](https://pkg.go.dev/github.com/lightwebinc/bitcoin-retry-endpoint)
-[![Go Report Card](https://goreportcard.com/badge/github.com/lightwebinc/bitcoin-retry-endpoint)](https://goreportcard.com/report/github.com/lightwebinc/bitcoin-retry-endpoint)
+[![CI](https://github.com/lightwebinc/retry-endpoint/actions/workflows/ci.yml/badge.svg)](https://github.com/lightwebinc/retry-endpoint/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/lightwebinc/retry-endpoint/actions/workflows/codeql.yml/badge.svg)](https://github.com/lightwebinc/retry-endpoint/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/lightwebinc/retry-endpoint)](https://github.com/lightwebinc/retry-endpoint/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/lightwebinc/retry-endpoint.svg)](https://pkg.go.dev/github.com/lightwebinc/retry-endpoint)
+[![Go Report Card](https://goreportcard.com/badge/github.com/lightwebinc/retry-endpoint)](https://goreportcard.com/report/github.com/lightwebinc/retry-endpoint)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 Caching endpoint for NACK-based retransmission in the BSV multicast pipeline.
 Receives BRC-124/BRC-128 frames from the multicast fabric, caches them, and retransmits
-on demand to `bitcoin-shard-listener` nodes that detect sequence gaps.
+on demand to `shard-listener` nodes that detect sequence gaps.
 
 ```
-bitcoin-shard-proxy ──multicast──▶ FF05::<shard>:9001
+shard-proxy ──multicast──▶ FF05::<shard>:9001
                                          │
                           ┌──────────────┤
                           │              │
                           ▼              ▼
-               bitcoin-shard-listener  bitcoin-retry-endpoint
+               shard-listener  retry-endpoint
                (gap detected → NACK) ──UDP──▶ [nack-addr]:9300
                           │                   │
                           ◀── ACK / MISS ─────┘
@@ -27,13 +27,13 @@ bitcoin-shard-proxy ──multicast──▶ FF05::<shard>:9001
 
 - [Architecture](docs/architecture.md) — pipeline overview, ingress, cache, NACK server, retransmit, beacon, NACK bind address, package structure
 - [Configuration](docs/configuration.md) — all flags, environment variables, defaults, deployment examples
-- [BRC-126 — Retransmission Protocol](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/brc-126-retransmission-protocol.md)
-- [NACK Retransmission Flow](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/nack-retransmission-flow.md)
-- [BRC-124 Frame Format](https://github.com/lightwebinc/bitcoin-multicast/blob/main/docs/brc-124-frame-format.md)
+- [BRC-126 — Retransmission Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md)
+- [NACK Retransmission Flow](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/nack-retransmission-flow.md)
+- [BRC-124 Frame Format](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-124-frame-format.md)
 
 ## Dependencies
 
-- [`github.com/lightwebinc/bitcoin-shard-common`](https://github.com/lightwebinc/bitcoin-shard-common) — `frame`, `shard`, `seqhash` packages
+- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common) — `frame`, `shard`, `seqhash` packages
 - [`github.com/coocood/freecache`](https://github.com/coocood/freecache) — GC-free in-memory cache
 - Prometheus client + OpenTelemetry SDK
 
@@ -47,20 +47,20 @@ bitcoin-shard-proxy ──multicast──▶ FF05::<shard>:9001
 ## Build
 
 ```bash
-go build -o bitcoin-retry-endpoint .
+go build -o retry-endpoint .
 ```
 
 ## Run
 
 ```bash
 # In-memory cache (single node)
-./bitcoin-retry-endpoint \
+./retry-endpoint \
   -mc-iface eth0 \
   -egress-iface eth0 \
   -shard-bits 2
 
 # Redis cache (multi-node with cross-instance dedup)
-./bitcoin-retry-endpoint \
+./retry-endpoint \
   -mc-iface enp6s0 \
   -egress-iface enp6s0 \
   -shard-bits 2 \
@@ -87,13 +87,13 @@ source-address selection rules may pick a SLAAC address (e.g.
   advertised address.
 
 Either path silently breaks NACK recovery. See
-[`bitcoin-shard-listener/nack/nack.go`](https://github.com/lightwebinc/bitcoin-shard-listener/blob/main/nack/nack.go)
+[`shard-listener/nack/nack.go`](https://github.com/lightwebinc/shard-listener/blob/main/nack/nack.go)
 and the SLAAC source-address-mismatch fix history.
 
 ## Container image
 
 The Dockerfile produces a `gcr.io/distroless/static:nonroot` image with a
-single static binary at `/usr/local/bin/bitcoin-retry-endpoint`. No in-image
+single static binary at `/usr/local/bin/retry-endpoint`. No in-image
 `ENV` defaults are set; configure via Helm `values.yaml` or container
 environment variables / CLI flags.
 
@@ -101,14 +101,14 @@ environment variables / CLI flags.
 
 A Kubernetes Helm chart is published from a dedicated chart repository:
 
-- Repository: [`lightwebinc/bitcoin-retry-endpoint-helm`](https://github.com/lightwebinc/bitcoin-retry-endpoint-helm)
+- Repository: [`lightwebinc/retry-endpoint-helm`](https://github.com/lightwebinc/retry-endpoint-helm)
 - HTTPS:
   ```
-  helm repo add bre https://lightwebinc.github.io/bitcoin-retry-endpoint-helm
-  helm install retry-node-1 bre/bitcoin-retry-endpoint \
+  helm repo add bre https://lightwebinc.github.io/retry-endpoint-helm
+  helm install retry-node-1 bre/retry-endpoint \
     --set config.nackAddr=fd20::24
   ```
-- OCI: `helm install retry-node-1 oci://ghcr.io/lightwebinc/charts/bitcoin-retry-endpoint --version 0.1.0`
+- OCI: `helm install retry-node-1 oci://ghcr.io/lightwebinc/charts/retry-endpoint --version 0.1.0`
 
 `config.nackAddr` is effectively required — the chart emits a `helm.sh/chart-warnings` annotation when empty. The chart does **not** bundle a Redis subchart; operators install Redis separately when `config.cacheBackend=redis`. See the chart README for the full reference.
 
