@@ -340,14 +340,14 @@ func buildGroups(cfg *config.Config, engine *shard.Engine) ([]*net.UDPAddr, erro
 		groups[i] = addr
 	}
 
-	// Join the block control group (FF0E::B:FFFE) so we cache block
+	// Join the block broadcast group (FF0E::B:FFFE) so we cache block
 	// announcement and coinbase frames for retransmission.
-	ctrlIP := shard.ControlGroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.CtrlGroupControl)
+	ctrlIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupBlockBroadcast)
 	groups = append(groups, &net.UDPAddr{IP: ctrlIP, Port: cfg.ListenPort})
 
 	// Join the subtree data group (FF0X::B:FFFB) when BRC-132 caching is enabled.
 	if cfg.SubtreeDataEnabled {
-		subtreeDataIP := shard.ControlGroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.CtrlGroupSubtreeAnnounce)
+		subtreeDataIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupSubtreeAnnounce)
 		groups = append(groups, &net.UDPAddr{IP: subtreeDataIP, Port: cfg.ListenPort})
 	}
 

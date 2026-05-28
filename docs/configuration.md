@@ -53,10 +53,10 @@ Txid prefix bit width used as the shard key. Must exactly match the proxy's
 ### `-subtree-data-enabled` / `SUBTREE_DATA_ENABLED` (default: `false`)
 
 Enable BRC-132 subtree data caching. When `true`, the ingress worker joins
-`CtrlGroupSubtreeAnnounce` (`FF0X::B:FFFB`) in addition to all shard groups and
-`CtrlGroupControl`. BRC-132 frames received on this group are cached with the standard
+`GroupSubtreeAnnounce` (`FF0X::B:FFFB`) in addition to all shard groups and
+`GroupBlockBroadcast`. BRC-132 frames received on this group are cached with the standard
 `HashKey ∥ SeqNum` key and served on NACK request. The retransmitter routes BRC-132 frames
-back to `CtrlGroupSubtreeAnnounce` on cache hit.
+back to `GroupSubtreeAnnounce` on cache hit.
 
 Set this flag when any downstream `shard-listener` has `-subtree-data-enabled=true`
 and relies on NACK-based retransmission for subtree data fragments.

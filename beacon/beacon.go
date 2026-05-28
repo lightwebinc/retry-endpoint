@@ -172,15 +172,15 @@ func (s *Sender) beaconGroups() []*net.UDPAddr {
 	var groups []*net.UDPAddr
 
 	if s.cfg.Scope == 0x05 || s.cfg.Scope == 0xFF {
-		ip := shard.ControlGroupAddr(0xFF05, s.cfg.GroupID, shard.CtrlGroupBeacon)
+		ip := shard.GroupAddr(0xFF05, s.cfg.GroupID, shard.GroupBeacon)
 		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
 	}
 	if s.cfg.Scope == 0x08 || s.cfg.Scope == 0xFF {
-		ip := shard.ControlGroupAddr(0xFF08, s.cfg.GroupID, shard.CtrlGroupBeacon)
+		ip := shard.GroupAddr(0xFF08, s.cfg.GroupID, shard.GroupBeacon)
 		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
 	}
 	if s.cfg.Scope == 0x0E || s.cfg.Scope == 0xFF {
-		ip := shard.ControlGroupAddr(0xFF0E, s.cfg.GroupID, shard.CtrlGroupBeacon)
+		ip := shard.GroupAddr(0xFF0E, s.cfg.GroupID, shard.GroupBeacon)
 		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
 	}
 
