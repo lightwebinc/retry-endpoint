@@ -35,6 +35,54 @@ Default `0x000B` corresponds to the IANA-assigned Bitcoin allocation
 
 ---
 
+## SSM (RFC 4607)
+
+See the [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/SourceSpecificMulticast/ssm-support-plan.md).
+The retry-endpoint plays two roles under SSM: it **emits** NACK-discovery
+beacons (so listeners need to know `bindSource` to pre-declare it in
+their `ssm-bootstrap-beacon`), and it **consumes** the data plane
+(so it needs its own bootstrap source lists for the multicast groups
+it joins). ASM is the default.
+
+### `-source-mode` / `SOURCE_MODE` (default: `asm`)
+
+Addressing model. `ssm` derives the prefix via `shard.Prefix(SSM,
+scope)` → FF35 site / FF3E global; rejects ASM at global per RFC 8815.
+
+### `-bind-source` / `BIND_SOURCE` (default: `""`)
+
+IPv6 literal bound on the beacon emit socket via `net.DialUDP(laddr=...)`.
+SSM listeners list this address in their `-ssm-bootstrap-beacon`.
+Each retry-endpoint replica MUST use a distinct `bindSource`.
+
+### `-ssm-bootstrap-manifest` / `SSM_BOOTSTRAP_MANIFEST` (default: `""`)
+
+CSV of shard-manifest source IPs (literals or DNS names). Used for the
+`(S,G)` join of the manifest / block-broadcast group.
+
+### `-ssm-bootstrap-beacon` / `SSM_BOOTSTRAP_BEACON` (default: `""`)
+
+CSV of retry-endpoint source IPs. Used for the `(S,G)` join of the
+beacon group when this retry-endpoint also consumes beacons (e.g. peer
+discovery in multi-retry deployments).
+
+### `-ssm-bootstrap-subtree-announce` / `SSM_BOOTSTRAP_SUBTREE_ANNOUNCE` (default: `""`)
+
+CSV of subtree-announce emitter source IPs for that control group.
+
+### `-ssm-publishers-static` / `SSM_PUBLISHERS_STATIC` (default: `""`)
+
+Lab/CI: pre-declared data-plane publisher source list. Production uses
+manifest-driven discovery. Fail-closed validation rejects > 16 entries
+without a manifest bootstrap.
+
+### `-ssm-bootstrap-refresh` / `SSM_BOOTSTRAP_REFRESH` (default: `30s`)
+
+DNS re-resolve interval; last-good set is retained on transient
+refresh failures.
+
+---
+
 ## Sharding
 
 ### `-shard-bits` / `SHARD_BITS` (default: `2`)

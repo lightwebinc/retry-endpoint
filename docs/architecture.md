@@ -36,6 +36,28 @@ shard-listener              retry-endpoint
               ◀── ACK/MISS ────────────┘
 ```
 
+## SSM (RFC 4607) mode
+
+When `-source-mode=ssm` the retry-endpoint operates as both an SSM
+emitter and an SSM consumer:
+
+- **Beacon emit** binds `-bind-source` via `net.DialUDP(laddr=...)`
+  so listeners can pre-declare this retry-endpoint in their
+  `ssm-bootstrap-beacon` list. Each replica MUST use a distinct
+  `bindSource` (anycast / ECMP-shared sources break PIM-SSM RPF).
+- **Data-plane ingress** uses the shared `shard-common/netjoin.Join`
+  helper, which branches `IPV6_JOIN_GROUP` vs
+  `MCAST_JOIN_SOURCE_GROUP` by the per-group source list. Source lists
+  come from per-control-group bootstrap (`-ssm-bootstrap-manifest`,
+  `-ssm-bootstrap-beacon`, `-ssm-bootstrap-subtree-announce`) resolved
+  via `shard-common/bootstrap.Resolver` (DNS names or IPv6 literals;
+  fail-closed startup; last-good retention on refresh failures).
+- **Addressing** uses `FF35::B:idx` (site SSM) or `FF3E::B:idx`
+  (global SSM); ASM at global scope is rejected per RFC 8815.
+
+See the [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/SourceSpecificMulticast/ssm-support-plan.md)
+for fabric prerequisites (PIM-SSM, MLDv2, raised `mld_max_msf`).
+
 ## Ingress (multicast receive)
 
 A single goroutine opens a UDP socket with `SO_REUSEPORT` on the configured

@@ -67,6 +67,18 @@ go build -o retry-endpoint .
   -cache-backend redis \
   -redis-addr redis.local:6379 \
   -nack-addr fd20::24
+
+# SSM (RFC 4607) — Posture C. Requires PIM-SSM in the fabric and
+# raised net.ipv6.mld_max_msf. See bsv-multicast SSM Support Plan.
+./retry-endpoint \
+  -mc-iface enp6s0 \
+  -egress-iface enp6s0 \
+  -shard-bits 2 \
+  -scope site \
+  -source-mode ssm \
+  -bind-source fd20::24 \
+  -ssm-bootstrap-manifest shard-manifest-headless.svc.cluster.local \
+  -ssm-publishers-static  fd20::a01,fd20::a02   # lab only
 ```
 
 See [docs/configuration.md](docs/configuration.md) for all flags and environment variable equivalents.
