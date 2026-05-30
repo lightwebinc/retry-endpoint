@@ -42,6 +42,7 @@ type Config struct {
 	InstanceID uint32         // unique instance identifier
 	GroupID    uint16         // IANA group-id occupying bytes 12–13 (default 0x000B)
 	Iface      *net.Interface // outgoing multicast interface
+	BindSource net.IP         // optional IPv6 to bind for beacon egress; required when SSM listeners pre-declare this retry-endpoint in sources.bootstrap.beacon
 }
 
 // Sender periodically multicasts ADVERT beacons.
@@ -82,11 +83,15 @@ func (s *Sender) Run(ctx context.Context) error {
 	// Open multicast send sockets.
 	// Set IPV6_MULTICAST_IF to force beacons out the fabric interface (enp6s0),
 	// overriding the lower-metric management default route.
+	var laddr *net.UDPAddr
+	if s.cfg.BindSource != nil {
+		laddr = &net.UDPAddr{IP: s.cfg.BindSource}
+	}
 	conns := make([]*net.UDPConn, 0, len(groups))
 	for _, grp := range groups {
-		conn, err := net.DialUDP("udp6", nil, grp)
+		conn, err := net.DialUDP("udp6", laddr, grp)
 		if err != nil {
-			s.log.Error("beacon: cannot dial beacon group", "group", grp, "err", err)
+			s.log.Error("beacon: cannot dial beacon group", "group", grp, "err", err, "bind_source", s.cfg.BindSource)
 			continue
 		}
 		if s.cfg.Iface != nil {

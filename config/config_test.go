@@ -158,3 +158,27 @@ func TestEnvDuration(t *testing.T) {
 		t.Errorf("invalid → default: %v", got)
 	}
 }
+
+func TestSplitCSV(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{"", nil},
+		{"a", []string{"a"}},
+		{"a,b , c", []string{"a", "b", "c"}},
+		{",,", nil},
+	}
+	for _, tc := range cases {
+		got := splitCSV(tc.in)
+		if len(got) != len(tc.want) {
+			t.Errorf("splitCSV(%q) = %v, want %v", tc.in, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("splitCSV(%q)[%d] = %q, want %q", tc.in, i, got[i], tc.want[i])
+			}
+		}
+	}
+}

@@ -25,11 +25,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"time"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/lightwebinc/shard-common/frame"
+	"github.com/lightwebinc/shard-common/netjoin"
 
 	"github.com/lightwebinc/retry-endpoint/cache"
 	"github.com/lightwebinc/retry-endpoint/metrics"
@@ -50,16 +52,25 @@ type TTLConfig struct {
 	Anchor  time.Duration // FrameVer V6 (BRC-134 anchor tx)
 }
 
+// GroupSources maps a multicast group address (16-byte IPv6 in dotted
+// string form per netip.Addr) to its SSM source list. Groups not present
+// in the map (or whose source list is empty) are joined ASM-style with
+// IPV6_JOIN_GROUP. Each control group's source list is the matching
+// sources.bootstrap.<group> bucket; the data-plane source list is the
+// manifest-derived publisher union.
+type GroupSources map[netip.Addr][]netip.Addr
+
 // Worker is the single multicast receive goroutine.
 type Worker struct {
-	iface  *net.Interface
-	port   int
-	groups []*net.UDPAddr
-	cache  cache.Cache
-	rec    *metrics.Recorder
-	ttls   TTLConfig
-	debug  bool
-	log    *slog.Logger
+	iface   *net.Interface
+	port    int
+	groups  []*net.UDPAddr
+	sources GroupSources // optional; non-nil entries trigger SSM joins
+	cache   cache.Cache
+	rec     *metrics.Recorder
+	ttls    TTLConfig
+	debug   bool
+	log     *slog.Logger
 }
 
 // New constructs a Worker.
@@ -84,6 +95,13 @@ func New(
 	}
 }
 
+// SetGroupSources configures per-group SSM source lists. Must be called
+// before [Worker.Run]. Groups absent from src (or with empty source
+// lists) are joined ASM-style.
+func (w *Worker) SetGroupSources(src GroupSources) {
+	w.sources = src
+}
+
 // Run opens a SO_REUSEPORT socket, joins all multicast groups, and processes
 // frames until ctx is cancelled.
 func (w *Worker) Run(ctx context.Context) error {
@@ -93,11 +111,19 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 
 	for _, grp := range w.groups {
-		mreq := &unix.IPv6Mreq{Interface: uint32(w.iface.Index)}
-		copy(mreq.Multiaddr[:], grp.IP.To16())
-		if err := unix.SetsockoptIPv6Mreq(fd, unix.IPPROTO_IPV6, unix.IPV6_JOIN_GROUP, mreq); err != nil {
+		ga, ok := netip.AddrFromSlice(grp.IP.To16())
+		if !ok {
 			_ = unix.Close(fd)
-			return fmt.Errorf("ingress: join group %s: %w", grp.IP, err)
+			return fmt.Errorf("ingress: bad group address %s", grp.IP)
+		}
+		// SSM sources for this group, if any. ASM join when nil/empty.
+		var srcs []netip.Addr
+		if w.sources != nil {
+			srcs = w.sources[ga]
+		}
+		if err := netjoin.Join(fd, w.iface.Index, ga, srcs); err != nil {
+			_ = unix.Close(fd)
+			return fmt.Errorf("ingress: join group %s (%d sources): %w", grp.IP, len(srcs), err)
 		}
 	}
 

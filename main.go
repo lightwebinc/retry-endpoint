@@ -14,6 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"net/netip"
+
+	"github.com/lightwebinc/shard-common/bootstrap"
 	"github.com/lightwebinc/shard-common/shard"
 
 	"github.com/lightwebinc/retry-endpoint/beacon"
@@ -27,6 +30,89 @@ import (
 	"github.com/lightwebinc/retry-endpoint/retransmit"
 	"github.com/lightwebinc/retry-endpoint/server"
 )
+
+// buildSSMGroupSources resolves the per-control-group bootstrap source
+// lists into an ingress.GroupSources map keyed by the group's IPv6 (S,G)
+// receiver-side join target. Resolvers run for the lifetime of ctx; the
+// initial resolution is synchronous and fail-closed (Start returns an
+// error if any configured list resolves to zero addresses).
+//
+// Mapping (BRC-129 indices):
+//
+//	GroupBeacon            (0xFFFD) → SSMBootstrapBeacon (retry-endpoint pods)
+//	GroupSubtreeAnnounce   (0xFFFB) → SSMBootstrapSubtreeAnn
+//	GroupSubtreeGroupAnn   (0xFFFC) → SSMBootstrapSubtreeAnn (same source set)
+//	GroupBlockBroadcast    (0xFFFE) → SSMBootstrapManifest (block-bcast follows manifest emitters)
+//	data-plane shard groups        → SSMPublishersStatic (lab) or manifest
+//	                                  union (production — wired by the
+//	                                  manifest consumer in a later iteration)
+func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.GroupSources, error) {
+	gs := make(ingress.GroupSources)
+
+	resolve := func(entries []string, target ingress.GroupSources, groupIPs ...net.IP) error {
+		if len(entries) == 0 {
+			return nil
+		}
+		r := &bootstrap.Resolver{
+			Entries: entries,
+			Refresh: cfg.SSMBootstrapRefresh,
+		}
+		if err := r.Start(ctx); err != nil {
+			return err
+		}
+		for _, gip := range groupIPs {
+			ga, ok := netip.AddrFromSlice(gip.To16())
+			if !ok {
+				return fmt.Errorf("group %s: not IPv6", gip)
+			}
+			target[ga] = r.Current()
+		}
+		return nil
+	}
+
+	// Beacon group sources = retry-endpoint pods (self).
+	beaconIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupBeacon)
+	if err := resolve(cfg.SSMBootstrapBeacon, gs, beaconIP); err != nil {
+		return nil, fmt.Errorf("beacon: %w", err)
+	}
+	// Subtree-announce + subtree-group-announce share the same emitter set.
+	subAnnIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupSubtreeAnnounce)
+	subGrpAnnIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupSubtreeGroupAnnounce)
+	if err := resolve(cfg.SSMBootstrapSubtreeAnn, gs, subAnnIP, subGrpAnnIP); err != nil {
+		return nil, fmt.Errorf("subtree-announce: %w", err)
+	}
+	// Manifest emitters drive block-broadcast too.
+	blockBcastIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupBlockBroadcast)
+	if err := resolve(cfg.SSMBootstrapManifest, gs, blockBcastIP); err != nil {
+		return nil, fmt.Errorf("manifest: %w", err)
+	}
+
+	// Data-plane: static publisher list (lab/CI). Production manifest-
+	// driven discovery wires the same map after parsing each manifest.
+	if len(cfg.SSMPublishersStatic) > 0 {
+		r := &bootstrap.Resolver{
+			Entries: cfg.SSMPublishersStatic,
+			Refresh: cfg.SSMBootstrapRefresh,
+		}
+		if err := r.Start(ctx); err != nil {
+			return nil, fmt.Errorf("publishers-static: %w", err)
+		}
+		srcs := r.Current()
+		// Apply to every shard group address derived from MCPrefix/MCGroupID.
+		// The shard.Engine.Addr helper isn't visible here (no engine in
+		// main scope at this point), but iterating numGroups by index is
+		// straightforward.
+		for idx := uint32(0); idx < cfg.NumGroups; idx++ {
+			ip := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupIdx(idx))
+			ga, ok := netip.AddrFromSlice(ip.To16())
+			if !ok {
+				continue
+			}
+			gs[ga] = srcs
+		}
+	}
+	return gs, nil
+}
 
 // hashInstanceID derives a 32-bit identifier for this endpoint from the
 // instance name so the listener registry can key ADVERT entries stably
@@ -218,6 +304,20 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// SSM: resolve the per-control-group bootstrap source lists. Resolvers
+	// run for the lifetime of ctx; OnChange triggers will not propagate
+	// to live joins until a future iteration adds dynamic membership
+	// (the current ingress worker resolves once at start). For now,
+	// fail-closed startup ensures every configured control group has at
+	// least one resolved source.
+	if cfg.SourceMode == "ssm" {
+		gs, err := buildSSMGroupSources(ctx, cfg)
+		if err != nil {
+			return fmt.Errorf("ssm bootstrap: %w", err)
+		}
+		ing.SetGroupSources(gs)
+	}
+
 	var wg sync.WaitGroup
 
 	// Start metrics server.
@@ -286,6 +386,10 @@ func run() error {
 				host = h
 			}
 		}
+		var bindSrc net.IP
+		if cfg.BindSource != "" {
+			bindSrc = net.ParseIP(cfg.BindSource)
+		}
 		beaconCfg := beacon.Config{
 			NACKAddr:   nackIP,
 			NACKPort:   uint16(cfg.NACKPort),
@@ -297,6 +401,7 @@ func run() error {
 			InstanceID: hashInstanceID(host),
 			GroupID:    cfg.MCGroupID,
 			Iface:      beaconIface,
+			BindSource: bindSrc,
 		}
 		beaconSender := beacon.New(beaconCfg)
 		beaconSender.SetRecorder(rec)
