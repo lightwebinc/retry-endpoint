@@ -25,7 +25,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version-file: retry-endpoint/go.mod
+          go-version-file: retry-endpoint/ci/go.mod
           cache: false
 
       - name: Run Dagger pipeline
