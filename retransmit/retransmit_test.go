@@ -7,9 +7,10 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
+	scache "github.com/lightwebinc/shard-common/cache"
 	"github.com/lightwebinc/shard-common/shard"
 
-	"github.com/lightwebinc/retry-endpoint/cache/redis"
+	"github.com/lightwebinc/retry-endpoint/cache"
 )
 
 func TestNew(t *testing.T) {
@@ -59,11 +60,12 @@ func TestRetransmit_DedupSuppresses(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mr.Close()
-	rc, err := redis.New(mr.Addr(), "test:")
+	backend, err := scache.Open(nil, scache.Config{Backend: scache.BackendRedis, RedisAddr: mr.Addr()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = rc.Close() }()
+	defer func() { _ = backend.Close() }()
+	rc := cache.NewStore(backend, "test:", time.Second)
 
 	eng := shard.New(0xFF05, shard.DefaultGroupID, 2)
 	r := New(eng, nil, 9001, time.Minute, rc, nil, false)

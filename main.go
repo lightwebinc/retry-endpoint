@@ -17,12 +17,11 @@ import (
 	"net/netip"
 
 	"github.com/lightwebinc/shard-common/bootstrap"
+	scache "github.com/lightwebinc/shard-common/cache"
 	"github.com/lightwebinc/shard-common/shard"
 
 	"github.com/lightwebinc/retry-endpoint/beacon"
 	"github.com/lightwebinc/retry-endpoint/cache"
-	"github.com/lightwebinc/retry-endpoint/cache/memory"
-	"github.com/lightwebinc/retry-endpoint/cache/redis"
 	"github.com/lightwebinc/retry-endpoint/config"
 	"github.com/lightwebinc/retry-endpoint/ingress"
 	"github.com/lightwebinc/retry-endpoint/metrics"
@@ -198,38 +197,50 @@ func run() error {
 	// Build shard engine.
 	engine := shard.New(cfg.MCPrefix, cfg.MCGroupID, cfg.ShardBits)
 
-	// Build cache backend.
-	var c cache.Cache
-	var redisCache *redis.Cache
-	switch cfg.CacheBackend {
-	case "redis":
-		if cfg.RedisAddr == "" {
-			return fmt.Errorf("REDIS_ADDR required when CACHE_BACKEND=redis")
-		}
-		redisCache, err = redis.New(cfg.RedisAddr, "bre:frame:")
-		if err != nil {
-			return err
-		}
-		c = redisCache
-	case "memory":
-		c = memory.New(cfg.CacheMaxKeys)
-	default:
-		slog.Warn("unknown cache backend, using memory", "backend", cfg.CacheBackend)
-		c = memory.New(cfg.CacheMaxKeys)
+	// Build the modular cache backend (memory | redis | aerospike). The
+	// frame store and the cross-instance dedup gate share one backend via
+	// independent key prefixes ("bre:frame:" and "bre:dedup:").
+	frameBackend, err := scache.Open(context.Background(), scache.Config{
+		Backend:       cfg.CacheBackend,
+		MemoryMaxKeys: cfg.CacheMaxKeys,
+		RedisAddr:     cfg.RedisAddr,
+		AeroHosts:     cfg.AeroHosts,
+		AeroNamespace: cfg.AeroNamespace,
+		AeroSet:       cfg.AeroSet,
+		DialTimeout:   cfg.CacheDialTimeout,
+		OpTimeout:     cfg.CacheOpTimeout,
+	})
+	if err != nil {
+		return fmt.Errorf("cache backend: %w", err)
 	}
-	defer func() { _ = c.Close() }()
+	defer func() { _ = frameBackend.Close() }()
 
-	// Cross-instance dedup via Redis SET NX.
-	// When CACHE_BACKEND=memory and REDIS_ADDR is set, frame storage stays per-instance
-	// (freecache), and Redis is used only for the dedup gate in Retransmitter.Retransmit().
-	if redisCache == nil && cfg.RedisAddr != "" {
-		redisCache, err = redis.New(cfg.RedisAddr, "bre:dedup:")
-		if err != nil {
-			slog.Warn("redis dedup unavailable, running without cross-instance dedup", "addr", cfg.RedisAddr, "err", err)
-			redisCache = nil
-		} else {
-			defer func() { _ = redisCache.Close() }()
-			slog.Info("cross-instance dedup enabled", "addr", cfg.RedisAddr)
+	c := cache.NewStore(frameBackend, "bre:frame:", cfg.CacheOpTimeout)
+
+	// Cross-instance retransmit dedup. A redis/aerospike frame backend is
+	// itself cross-instance, so reuse it under the "bre:dedup:" prefix. With
+	// CACHE_BACKEND=memory (per-instance frames) the dedup gate still needs a
+	// shared store: build a separate redis backend from REDIS_ADDR if given.
+	var dedup cache.Deduper
+	switch cfg.CacheBackend {
+	case "redis", "aerospike":
+		dedup = cache.NewStore(frameBackend, "bre:dedup:", cfg.CacheOpTimeout)
+		slog.Info("cross-instance dedup enabled", "backend", cfg.CacheBackend)
+	case "memory":
+		if cfg.RedisAddr != "" {
+			dedupBackend, derr := scache.Open(context.Background(), scache.Config{
+				Backend:     scache.BackendRedis,
+				RedisAddr:   cfg.RedisAddr,
+				DialTimeout: cfg.CacheDialTimeout,
+				OpTimeout:   cfg.CacheOpTimeout,
+			})
+			if derr != nil {
+				slog.Warn("redis dedup unavailable, running without cross-instance dedup", "addr", cfg.RedisAddr, "err", derr)
+			} else {
+				defer func() { _ = dedupBackend.Close() }()
+				dedup = cache.NewStore(dedupBackend, "bre:dedup:", cfg.CacheOpTimeout)
+				slog.Info("cross-instance dedup enabled", "addr", cfg.RedisAddr)
+			}
 		}
 	}
 
@@ -271,7 +282,7 @@ func run() error {
 	})
 
 	// Build retransmitter.
-	retrans := retransmit.New(engine, egressIfaces, cfg.EgressPort, cfg.DedupWindow, redisCache, rec, cfg.Debug)
+	retrans := retransmit.New(engine, egressIfaces, cfg.EgressPort, cfg.DedupWindow, dedup, rec, cfg.Debug)
 	if err := retrans.Open(); err != nil {
 		return err
 	}
@@ -327,8 +338,9 @@ func run() error {
 		rec.Serve(cfg.MetricsAddr, done)
 	}()
 
-	// Start cache size sampler (samples Len() every 15s if the backend supports it).
-	if sizer, ok := c.(interface{ Len() int }); ok {
+	// Start cache size sampler (samples Len() every 15s). Len() is meaningful
+	// only for the in-memory backend; remote backends report 0.
+	if cfg.CacheBackend == scache.BackendMemory {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -337,7 +349,7 @@ func run() error {
 			for {
 				select {
 				case <-t.C:
-					rec.CacheSize(int64(sizer.Len()))
+					rec.CacheSize(int64(c.Len()))
 				case <-ctx.Done():
 					return
 				}

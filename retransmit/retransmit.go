@@ -13,7 +13,7 @@ import (
 	"github.com/lightwebinc/shard-common/frame"
 	"github.com/lightwebinc/shard-common/shard"
 
-	"github.com/lightwebinc/retry-endpoint/cache/redis"
+	"github.com/lightwebinc/retry-endpoint/cache"
 	"github.com/lightwebinc/retry-endpoint/metrics"
 )
 
@@ -23,7 +23,7 @@ type Retransmitter struct {
 	ifaces      []*net.Interface
 	egressPort  int
 	dedupWindow time.Duration
-	redisCache  *redis.Cache // nil if using in-memory cache
+	dedup       cache.Deduper // nil = no cross-instance dedup
 	rec         *metrics.Recorder
 	debug       bool
 	log         *slog.Logger
@@ -38,7 +38,7 @@ func New(
 	ifaces []*net.Interface,
 	egressPort int,
 	dedupWindow time.Duration,
-	redisCache *redis.Cache,
+	dedup cache.Deduper,
 	rec *metrics.Recorder,
 	debug bool,
 ) *Retransmitter {
@@ -47,7 +47,7 @@ func New(
 		ifaces:      ifaces,
 		egressPort:  egressPort,
 		dedupWindow: dedupWindow,
-		redisCache:  redisCache,
+		dedup:       dedup,
 		rec:         rec,
 		debug:       debug,
 		log:         slog.Default().With("component", "retransmit"),
@@ -88,11 +88,11 @@ func (r *Retransmitter) Close() error {
 
 // Retransmit sends a cached frame to the multicast network.
 func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
-	// Cross-instance deduplication via Redis SET NX.
-	if r.redisCache != nil {
+	// Cross-instance deduplication via backend SETNX.
+	if r.dedup != nil {
 		dedupKey := r.buildDedupKey(raw)
 		if len(dedupKey) > 0 {
-			set, err := r.redisCache.SetNX(dedupKey, []byte("1"), r.dedupWindow)
+			set, err := r.dedup.SetNX(dedupKey, []byte("1"), r.dedupWindow)
 			if err != nil {
 				r.log.Error("dedup SET NX error", "err", err)
 			}

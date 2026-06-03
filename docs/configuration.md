@@ -113,29 +113,48 @@ and relies on NACK-based retransmission for subtree data fragments.
 
 ## Cache
 
+The frame cache uses the modular `shard-common/cache` backend. See
+[`bsv-multicast/docs/ModularCacheBackend/`](../../bsv-multicast/docs/ModularCacheBackend/modular-cache-backend.md)
+for the interface and backend matrix.
+
 ### `-cache-backend` / `CACHE_BACKEND` (default: `memory`)
 
-Cache storage backend. Valid values: `memory`, `redis`.
+Cache storage backend. Valid values: `memory`, `redis`, `aerospike`.
 
-| Value    | Storage              | Cross-instance dedup | Notes                        |
-| -------- | -------------------- | -------------------- | ---------------------------- |
-| `memory` | In-process freecache | None                 | Single-node; lost on restart |
-| `redis`  | External Redis       | SET NX per frame     | Shared; survives restart     |
+| Value       | Storage                    | Cross-instance | Notes                                            |
+| ----------- | -------------------------- | -------------- | ------------------------------------------------ |
+| `memory`    | In-process striped map     | No             | Single-node; lost on restart                     |
+| `redis`     | Redis/Valkey/Dragonfly     | Yes            | `SET NX EX`; shared frames + dedup               |
+| `aerospike` | Aerospike Community Edition | Yes           | `CREATE_ONLY`; auto-sharded; **TTL floor 1s**    |
 
 ### `-redis-addr` / `REDIS_ADDR` (default: empty)
 
-Redis server address. Behaviour depends on `-cache-backend`:
+Redis-protocol address (Redis/Valkey/Dragonfly). Behaviour depends on `-cache-backend`:
 
-| `-cache-backend` | `REDIS_ADDR` set | Behaviour                                                    |
-| ---------------- | ---------------- | ------------------------------------------------------------ |
-| `memory`         | no               | freecache only; no cross-instance dedup                      |
-| `memory`         | yes              | freecache for frames; Redis used **only** for `SET NX` dedup |
-| `redis`          | yes (required)   | Redis for both frame storage and dedup                       |
+| `-cache-backend` | `REDIS_ADDR` set | Behaviour                                                      |
+| ---------------- | ---------------- | ------------------------------------------------------------- |
+| `memory`         | no               | per-instance frames; no cross-instance dedup                  |
+| `memory`         | yes              | per-instance frames; Redis used **only** for `SET NX` dedup   |
+| `redis`          | yes (required)   | Redis for both frame storage and dedup                        |
+| `aerospike`      | n/a              | Aerospike for both frame storage and dedup                    |
 
-When `REDIS_ADDR` is empty and `CACHE_BACKEND=redis`, startup fails with an
-explicit error. When `CACHE_BACKEND=memory` and `REDIS_ADDR` is set, the frame
-cache stays per-instance (scenario isolation is preserved) while retransmit
-deduplication becomes cross-instance.
+When the backend is `redis` (resp. `aerospike`) but `-redis-addr` (resp.
+`-aerospike-hosts`) is empty, startup fails with an explicit error. When
+`CACHE_BACKEND=memory` and `REDIS_ADDR` is set, the frame cache stays
+per-instance while retransmit deduplication becomes cross-instance.
+
+### `-aerospike-hosts` / `AEROSPIKE_HOSTS` (default: empty)
+
+Comma-separated Aerospike seed nodes (`host:port`, default port 3000). Required
+when `-cache-backend=aerospike`. The namespace and set are selected by
+`-aerospike-namespace` (default `cache`) and `-aerospike-set` (default `bre`);
+the namespace must be provisioned on the cluster. Aerospike expiration is in
+whole seconds with a 1s floor — all frame TTLs here satisfy that.
+
+### `-cache-dial-timeout` / `CACHE_DIAL_TIMEOUT` (default: `1s`) · `-cache-op-timeout` / `CACHE_OP_TIMEOUT` (default: `1s`)
+
+Backend connection and per-operation timeouts. Operations fail open (treated as
+a cache miss) on timeout so a slow backend never blocks NACK handling.
 
 ### `-cache-ttl` / `CACHE_TTL` (default: `60s`)
 

@@ -98,8 +98,19 @@ func TestLoad_CacheBackend(t *testing.T) {
 	if _, err := loadWithArgs(t, withEgress(t, "-cache-backend=bogus")...); err == nil {
 		t.Error("invalid cache-backend should error")
 	}
-	if _, err := loadWithArgs(t, withEgress(t, "-cache-backend=redis")...); err != nil {
-		t.Errorf("redis backend should be valid: %v", err)
+	// redis backend requires an address (fail-closed).
+	if _, err := loadWithArgs(t, withEgress(t, "-cache-backend=redis")...); err == nil {
+		t.Error("redis backend without -redis-addr should error")
+	}
+	if _, err := loadWithArgs(t, withEgress(t, "-cache-backend=redis", "-redis-addr=localhost:6379")...); err != nil {
+		t.Errorf("redis backend with addr should be valid: %v", err)
+	}
+	// aerospike backend requires hosts.
+	if _, err := loadWithArgs(t, withEgress(t, "-cache-backend=aerospike")...); err == nil {
+		t.Error("aerospike backend without -aerospike-hosts should error")
+	}
+	if _, err := loadWithArgs(t, withEgress(t, "-cache-backend=aerospike", "-aerospike-hosts=db:3000")...); err != nil {
+		t.Errorf("aerospike backend with hosts should be valid: %v", err)
 	}
 }
 

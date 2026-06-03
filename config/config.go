@@ -78,19 +78,24 @@ type Config struct {
 	// PublishersStatic: lab/CI escape hatch — pre-declared data-plane
 	//   publisher source list. Production must learn the data-plane source
 	//   set from manifest discovery.
-	SourceMode              string
-	BindSource              string
-	SSMBootstrapManifest    []string
-	SSMBootstrapBeacon      []string
-	SSMBootstrapSubtreeAnn  []string
-	SSMPublishersStatic     []string
-	SSMBootstrapRefresh     time.Duration
+	SourceMode             string
+	BindSource             string
+	SSMBootstrapManifest   []string
+	SSMBootstrapBeacon     []string
+	SSMBootstrapSubtreeAnn []string
+	SSMPublishersStatic    []string
+	SSMBootstrapRefresh    time.Duration
 
-	// Cache
-	CacheBackend string // "redis" or "memory"
-	RedisAddr    string // Redis server address (e.g., "localhost:6379")
-	CacheTTL     time.Duration
-	CacheMaxKeys int // Maximum number of keys in cache (0 = no limit)
+	// Cache (modular shard-common backend)
+	CacheBackend     string // "memory" | "redis" | "aerospike"
+	RedisAddr        string // Redis-protocol address (Redis/Valkey/Dragonfly); also enables cross-instance dedup when CacheBackend=memory
+	AeroHosts        []string
+	AeroNamespace    string
+	AeroSet          string
+	CacheDialTimeout time.Duration
+	CacheOpTimeout   time.Duration
+	CacheTTL         time.Duration
+	CacheMaxKeys     int // Maximum number of keys in cache (0 = no limit)
 
 	// Per-FrameVer TTLs. Resolution order applied in Load():
 	//   1. explicit semantic flag/env (e.g. CACHE_TTL_TX) — wins
@@ -165,9 +170,19 @@ func Load() (*Config, error) {
 		"multicast listen port")
 
 	flag.StringVar(&c.CacheBackend, "cache-backend", envStr("CACHE_BACKEND", "memory"),
-		"cache backend: redis | memory")
+		"cache backend: memory | redis | aerospike")
 	flag.StringVar(&c.RedisAddr, "redis-addr", envStr("REDIS_ADDR", ""),
-		"Redis server address (required when cache-backend=redis; also enables cross-instance dedup when cache-backend=memory)")
+		"Redis-protocol address (Redis/Valkey/Dragonfly); required when cache-backend=redis; also enables cross-instance dedup when cache-backend=memory")
+	aeroHosts := flag.String("aerospike-hosts", envStr("AEROSPIKE_HOSTS", ""),
+		"Aerospike seed nodes host:port (comma-separated); required when cache-backend=aerospike")
+	flag.StringVar(&c.AeroNamespace, "aerospike-namespace", envStr("AEROSPIKE_NAMESPACE", "cache"),
+		"Aerospike namespace for the frame cache")
+	flag.StringVar(&c.AeroSet, "aerospike-set", envStr("AEROSPIKE_SET", "bre"),
+		"Aerospike set for the frame cache")
+	flag.DurationVar(&c.CacheDialTimeout, "cache-dial-timeout", envDuration("CACHE_DIAL_TIMEOUT", time.Second),
+		"backend dial timeout")
+	flag.DurationVar(&c.CacheOpTimeout, "cache-op-timeout", envDuration("CACHE_OP_TIMEOUT", time.Second),
+		"backend per-operation timeout")
 	flag.DurationVar(&c.CacheTTL, "cache-ttl", envDuration("CACHE_TTL", 60*time.Second),
 		"cache TTL for frames (fallback default for any per-FrameVer TTL not explicitly set)")
 	flag.DurationVar(&c.CacheTTLTx, "cache-ttl-tx", envDuration("CACHE_TTL_TX", defaultCacheTTLTx),
@@ -379,9 +394,24 @@ func Load() (*Config, error) {
 	}
 	c.MCGroupID = gid
 
+	// Parse Aerospike seed nodes.
+	for _, h := range strings.Split(*aeroHosts, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			c.AeroHosts = append(c.AeroHosts, h)
+		}
+	}
+
 	// Validate cache backend.
-	if c.CacheBackend != "redis" && c.CacheBackend != "memory" {
-		return nil, fmt.Errorf("cache-backend must be 'redis' or 'memory', got %q", c.CacheBackend)
+	switch c.CacheBackend {
+	case "memory", "redis", "aerospike":
+	default:
+		return nil, fmt.Errorf("cache-backend must be 'memory', 'redis', or 'aerospike', got %q", c.CacheBackend)
+	}
+	if c.CacheBackend == "redis" && c.RedisAddr == "" {
+		return nil, fmt.Errorf("redis-addr required when cache-backend=redis")
+	}
+	if c.CacheBackend == "aerospike" && len(c.AeroHosts) == 0 {
+		return nil, fmt.Errorf("aerospike-hosts required when cache-backend=aerospike")
 	}
 
 	// Validate per-FrameVer TTLs.
