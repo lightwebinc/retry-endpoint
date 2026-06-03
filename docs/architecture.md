@@ -36,6 +36,68 @@ shard-listener              retry-endpoint
               ◀── ACK/MISS ────────────┘
 ```
 
+## Cascaded / downstream-domain retransmission
+
+The NACK protocol is domain-agnostic: the same cache + ADVERT + retransmit
+machinery that recovers the proxy→listener hop recovers a
+listener→downstream-consumer hop. This lets consumers downstream of a
+`shard-listener` request retransmission from a retry-endpoint deployed in
+**their own** multicast domain, with no protocol changes.
+
+The pattern relies on the listener's
+[multicast egress / domain bridging](https://github.com/lightwebinc/shard-listener/blob/main/docs/configuration.md).
+When `-mc-egress-enabled=true` the listener re-emits each filtered frame
+**verbatim** (full 92-byte frame; requires `-strip-header=false`) into a
+downstream multicast address space, keeping the proxy-stamped `HashKey` /
+`SeqNum` / `TxID` intact. Because flow identity survives the bridge:
+
+- downstream consumers detect gaps on the **same** `(HashKey, SeqNum)` flow;
+- a downstream retry-endpoint caches the bridged frames by `HashKey ∥ SeqNum`
+  and re-derives the shard group from `TxID` deterministically.
+
+Once the upstream listener has completed its own NACK recovery, the verbatim
+bridge gives the downstream domain a complete stream; the downstream
+retry-endpoint only repairs losses on the listener→downstream hop.
+
+```
+upstream fabric                         downstream domain
+─────────────                           ─────────────────
+shard-proxy ─▶ FF0X::Gᵤ:idx
+                  │
+          ┌───────┴────────┐
+          ▼                ▼
+   retry-endpoint     shard-listener ──mc-egress──▶ FF0X::G_d:idx
+   (upstream)           (bridge)                       │
+                                            ┌──────────┴──────────┐
+                                            ▼                     ▼
+                                     retry-endpoint        downstream consumer
+                                     (downstream)  ◀─NACK──  (listener)
+                                            └────ACK+retransmit──▶
+```
+
+All retry-endpoint group addresses (ingress join, ADVERT beacon, retransmit
+egress) derive from `-scope` + `-mc-group-id`, so a downstream deployment is
+configured purely by aligning those with the bridge's egress space:
+
+| Upstream listener (bridge)       | Downstream retry-endpoint           | Downstream consumer  |
+| -------------------------------- | ----------------------------------- | -------------------- |
+| `-mc-egress-enabled=true`        | —                                   | —                    |
+| `-strip-header=false` (default)  | —                                   | —                    |
+| `-mc-egress-scope` = X           | `-scope` = X                        | `-scope` = X         |
+| `-mc-egress-group-id` = G_d      | `-mc-group-id` = G_d                | `-mc-group-id` = G_d |
+| `-mc-egress-port` = P            | `-listen-port`=P, `-egress-port`=P  | `-listen-port` = P   |
+| `-shard-bits` = B                | `-shard-bits` = B                   | `-shard-bits` = B    |
+
+Isolate the two domains — translate the group-id (`G_d ≠ Gᵤ`) or confine the
+bridge with `-mc-egress-hoplimit` / a distinct `-mc-egress-iface` — so
+downstream beacons and retransmits do not leak back upstream.
+
+**Scope:** this covers the BRC-124/BRC-128 transaction hot path, which is the
+path the listener's multicast egress re-emits. Control-plane frames
+(BRC-131/132/134) take the listener's unicast egress and are not bridged onto
+the downstream multicast domain, so they are not recoverable downstream by
+this pattern.
+
 ## SSM (RFC 4607) mode
 
 When `-source-mode=ssm` the retry-endpoint operates as both an SSM
