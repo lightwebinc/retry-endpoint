@@ -417,6 +417,26 @@ push export; Prometheus scraping always works regardless.
 Metric export interval for the OTLP push exporter. Ignored when
 `OTLP_ENDPOINT` is empty.
 
+### `-log-format` / `LOG_FORMAT` (default: `text`)
+
+Structured-log output: `text` (stderr, dev default) or `json` (one JSON object
+per line on stdout, for fleet aggregation). Every line carries the
+`service.{name,instance.id,version}` identity triple shared with OTLP metrics.
+See the [Unified Logging Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/UnifiedLogging/unified-logging-plan.md).
+
+### `-log-level` / `LOG_LEVEL` (default: `info`)
+
+`debug` | `info` | `warn` | `error`. Runtime-togglable via `POST /loglevel?level=<lvl>`
+and SIGHUP. `-debug` is a deprecated alias for `-log-level=debug`.
+
+### `-trace-sampling` / `TRACE_SAMPLING` (default: `0`)
+
+Distributed-trace head sampling ratio `0.0`–`1.0`. `0` = no-op tracer (zero
+cost). When `> 0` with an `-otlp-endpoint`, control-plane flows (NACK →
+retransmit) are traced and exported via the collector; the cache hot path is
+never traced. At startup the endpoint emits a one-shot `host.inventory` event
+and a `bre_host_info` gauge.
+
 ---
 
 ## Key metrics

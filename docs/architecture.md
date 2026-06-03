@@ -241,6 +241,18 @@ On `SIGINT` or `SIGTERM`:
 3. `main` waits for all goroutines via `sync.WaitGroup`, then flushes the OTLP
    exporter before returning.
 
+## Logging & Tracing
+
+The endpoint uses the shared `shard-common/logging` package: `run` calls
+`logging.Init` once, installing a process-wide `slog` default carrying the
+`service.{name,instance.id,version}` identity triple (shared with the OTLP
+metrics resource attributes). `-log-format json` emits one JSON object per line
+on stdout; `-log-level` is runtime-togglable via `POST /loglevel` and SIGHUP. A
+one-shot `host.inventory` event and a `bre_host_info` gauge are emitted at
+startup. Tracing is opt-in (`-trace-sampling > 0` + `-otlp-endpoint`) and
+covers the NACK → retransmit control-plane flow, never the cache hot path. See
+the [Unified Logging Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/UnifiedLogging/unified-logging-plan.md).
+
 ## Package structure
 
 ```
