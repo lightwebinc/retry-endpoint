@@ -98,6 +98,42 @@ path the listener's multicast egress re-emits. Control-plane frames
 the downstream multicast domain, so they are not recoverable downstream by
 this pattern.
 
+### Failure mode: frames the listener never emitted
+
+A downstream retry-endpoint can only serve what it cached, and it caches the
+**same** multicast emission the consumers receive. If the listener never put a
+frame on the downstream wire — an `mc-egress` `sendto` failure
+(`bsl_mc_egress_errors_total`; the frame is dropped, not retried), an egress
+interface flap, or in-fabric loss with no successful copy reaching the segment
+— then the downstream retry-endpoint missed it identically. A downstream NACK
+then returns MISS from **every** downstream endpoint and the gap is
+unrecoverable within the downstream domain alone.
+
+This is the one hole the verbatim bridge does not close: completeness of the
+upstream stream (after the listener's own NACK recovery) guarantees the listener
+*had* the frame, not that it *emitted* it. Mitigations, in preference order:
+
+1. **Redundant bridge listeners.** Run ≥ 2 listeners bridging the same
+   upstream→downstream over independent egress paths. A single egress failure no
+   longer creates a domain-wide hole — another bridge emits the frame, and both
+   the downstream consumers and the downstream retry-endpoint receive it. Pair
+   with the listener's egress dedup (shared `-deployment-id` + Redis) so
+   consumers do not see duplicates. This is the only mitigation that keeps
+   recovery entirely inside the downstream domain.
+2. **Upstream fallback tier.** Give downstream consumers a higher-`Tier`
+   registry entry (a static `-retry-endpoints` seed) pointing at an *upstream*
+   retry-endpoint running `-beacon-flags-unicast=true`. On downstream-MISS
+   escalation the consumer reaches back across the domain boundary; the upstream
+   endpoint — which received the frame directly from the proxy, independent of
+   the failed bridge — unicast-retransmits the verbatim frame. Requires IP
+   reachability and that the frame is still within the upstream cache TTL.
+
+> **Not currently available:** NACK proxying — a downstream retry-endpoint
+> recovering a cache miss from upstream to repopulate its own cache and then
+> serve it — is not implemented. It would let the downstream domain self-heal
+> without per-consumer upstream-fallback config; today the mitigations above are
+> the supported options.
+
 ## SSM (RFC 4607) mode
 
 When `-source-mode=ssm` the retry-endpoint operates as both an SSM
