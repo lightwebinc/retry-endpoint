@@ -1,6 +1,7 @@
 package retransmit
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestRetransmit_DedupSuppresses(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mr.Close()
-	backend, err := scache.Open(nil, scache.Config{Backend: scache.BackendRedis, RedisAddr: mr.Addr()})
+	backend, err := scache.Open(context.Background(), scache.Config{Backend: scache.BackendRedis, RedisAddr: mr.Addr()})
 	if err != nil {
 		t.Fatal(err)
 	}

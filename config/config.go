@@ -133,10 +133,13 @@ type Config struct {
 	DrainTimeout time.Duration // Pre-drain delay before closing sockets
 
 	// Observability
-	MetricsAddr  string        // HTTP bind address for /metrics, /healthz, /readyz
-	InstanceID   string        // OTel service.instance.id
-	OTLPEndpoint string        // gRPC OTLP endpoint (empty = disabled)
-	OTLPInterval time.Duration // OTLP push interval
+	MetricsAddr   string        // HTTP bind address for /metrics, /healthz, /readyz
+	InstanceID    string        // OTel service.instance.id
+	OTLPEndpoint  string        // gRPC OTLP endpoint (empty = disabled)
+	OTLPInterval  time.Duration // OTLP push interval
+	LogFormat     string        // "text" (default) | "json"
+	LogLevel      string        // debug|info|warn|error
+	TraceSampling float64       // 0..1 head sampling ratio; 0 disables tracing
 
 	// Beacon (BRC-126 endpoint discovery)
 	BeaconEnabled        bool
@@ -251,7 +254,13 @@ func Load() (*Config, error) {
 	flag.BoolVar(&c.SubtreeDataEnabled, "subtree-data-enabled", envBool("SUBTREE_DATA_ENABLED", false),
 		"enable BRC-132 subtree data caching: join GroupSubtreeAnnounce (0xFFFB) group")
 	flag.BoolVar(&c.Debug, "debug", envBool("DEBUG", false),
-		"enable per-packet debug logging")
+		"enable per-packet debug logging; deprecated alias for -log-level=debug")
+	flag.StringVar(&c.LogFormat, "log-format", envStr("LOG_FORMAT", "text"),
+		"log output format: text (default, stderr) | json (stdout, for fleet aggregation)")
+	flag.StringVar(&c.LogLevel, "log-level", envStr("LOG_LEVEL", "info"),
+		"log level: debug|info|warn|error (overridden to debug when -debug is set)")
+	flag.Float64Var(&c.TraceSampling, "trace-sampling", envFloat("TRACE_SAMPLING", 0),
+		"distributed-trace head sampling ratio 0..1 (0 = tracing off; exports via -otlp-endpoint)")
 	flag.DurationVar(&c.DrainTimeout, "drain-timeout", envDuration("DRAIN_TIMEOUT", 0),
 		"pre-drain delay before closing sockets")
 

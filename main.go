@@ -18,7 +18,10 @@ import (
 
 	"github.com/lightwebinc/shard-common/bootstrap"
 	scache "github.com/lightwebinc/shard-common/cache"
+	"github.com/lightwebinc/shard-common/hostinfo"
+	"github.com/lightwebinc/shard-common/logging"
 	"github.com/lightwebinc/shard-common/shard"
+	"github.com/lightwebinc/shard-common/tracing"
 
 	"github.com/lightwebinc/retry-endpoint/beacon"
 	"github.com/lightwebinc/retry-endpoint/cache"
@@ -171,11 +174,18 @@ func run() error {
 		return err
 	}
 
-	logLevel := slog.LevelInfo
+	logLevel := logging.ParseLevel(cfg.LogLevel)
 	if cfg.Debug {
 		logLevel = slog.LevelDebug
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+	levelVar := logging.Init(logging.Options{
+		Service:    metrics.ServiceName,
+		InstanceID: cfg.InstanceID,
+		Version:    metrics.Version,
+		Level:      logLevel,
+		Format:     logging.ParseFormat(cfg.LogFormat),
+	})
+	logging.InstallSIGHUPToggle(levelVar, logLevel)
 
 	slog.Info("retry-endpoint starting",
 		"shard_bits", cfg.ShardBits,
@@ -193,6 +203,31 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	rec.SetLevelVar(levelVar)
+
+	// One-shot host inventory: descriptive payload as a log event, slim
+	// numerics mirrored as the bre_host_info gauge.
+	inv := hostinfo.Gather(metrics.ServiceName, metrics.Version)
+	rec.SetHostInfo(inv)
+	slog.Info("host.inventory", "inventory", inv)
+
+	// Opt-in distributed tracing (no-op unless -trace-sampling > 0 with an OTLP
+	// endpoint). Control-plane only (NACK -> retransmit); not the cache hot path.
+	_, traceShutdown, terr := tracing.Init(context.Background(), tracing.Options{
+		Service:      metrics.ServiceName,
+		InstanceID:   cfg.InstanceID,
+		Version:      metrics.Version,
+		OTLPEndpoint: cfg.OTLPEndpoint,
+		Sampling:     cfg.TraceSampling,
+	})
+	if terr != nil {
+		slog.Warn("tracing init failed; continuing without traces", "err", terr)
+	}
+	defer func() {
+		tctx, tcancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer tcancel()
+		_ = traceShutdown(tctx)
+	}()
 
 	// Build shard engine.
 	engine := shard.New(cfg.MCPrefix, cfg.MCGroupID, cfg.ShardBits)
