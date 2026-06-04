@@ -28,6 +28,7 @@ import (
 	"github.com/lightwebinc/retry-endpoint/config"
 	"github.com/lightwebinc/retry-endpoint/ingress"
 	"github.com/lightwebinc/retry-endpoint/metrics"
+	"github.com/lightwebinc/retry-endpoint/proxy"
 	"github.com/lightwebinc/retry-endpoint/ratelimit"
 	"github.com/lightwebinc/retry-endpoint/retransmit"
 	"github.com/lightwebinc/retry-endpoint/server"
@@ -257,8 +258,10 @@ func run() error {
 	// CACHE_BACKEND=memory (per-instance frames) the dedup gate still needs a
 	// shared store: build a separate redis backend from REDIS_ADDR if given.
 	var dedup cache.Deduper
+	var dedupB scache.Backend // backend used for cross-instance dedup; nil = none
 	switch cfg.CacheBackend {
 	case "redis", "aerospike":
+		dedupB = frameBackend
 		dedup = cache.NewStore(frameBackend, "bre:dedup:", cfg.CacheOpTimeout)
 		slog.Info("cross-instance dedup enabled", "backend", cfg.CacheBackend)
 	case "memory":
@@ -273,6 +276,7 @@ func run() error {
 				slog.Warn("redis dedup unavailable, running without cross-instance dedup", "addr", cfg.RedisAddr, "err", derr)
 			} else {
 				defer func() { _ = dedupBackend.Close() }()
+				dedupB = dedupBackend
 				dedup = cache.NewStore(dedupBackend, "bre:dedup:", cfg.CacheOpTimeout)
 				slog.Info("cross-instance dedup enabled", "addr", cfg.RedisAddr)
 			}
@@ -316,20 +320,23 @@ func run() error {
 		GroupBurst:     cfg.RLGroupBurst,
 	})
 
-	// Build retransmitter.
-	retrans := retransmit.New(engine, egressIfaces, cfg.EgressPort, cfg.DedupWindow, dedup, rec, cfg.Debug)
-	if err := retrans.Open(); err != nil {
-		return err
-	}
-	defer func() { _ = retrans.Close() }()
-
 	// Resolve NACK bind address. This is used to bind the NACK listening
 	// socket so ACK/MISS responses are sourced from the correct address
-	// (avoids kernel SLAAC source-address selection mismatch).
+	// (avoids kernel SLAAC source-address selection mismatch). It also sources
+	// the unicast retransmit socket so frames returned to a requester match the
+	// advertised address.
 	nackBindIP, err := pickBeaconNACKAddr(cfg.BeaconNACKAddr, egressIfaces[0])
 	if err != nil {
 		return fmt.Errorf("resolve nack bind address: %w", err)
 	}
+
+	// Build retransmitter.
+	retrans := retransmit.New(engine, egressIfaces, cfg.EgressPort, cfg.DedupWindow, dedup, rec, cfg.Debug)
+	retrans.SetUnicastSource(nackBindIP)
+	if err := retrans.Open(); err != nil {
+		return err
+	}
+	defer func() { _ = retrans.Close() }()
 
 	// Build server.
 	srv := server.New(cfg.NACKPort, c, rl, rec, retrans, cfg.NACKWorkers, cfg.Debug)
@@ -337,6 +344,39 @@ func run() error {
 	srv.SetSuppressACK(cfg.SuppressACK)
 	srv.SetSuppressMISS(cfg.SuppressMISS)
 	srv.SetShardEngine(engine)
+	srv.SetRetransmitModes(cfg.BeaconFlagsMulticast, cfg.BeaconFlagsUnicast)
+
+	// NACK proxying: recover cache misses from an upstream retry-endpoint.
+	// Constructed here (wired into the server before Run); workers started once
+	// the root context exists, below.
+	var proxyClient *proxy.Client
+	if cfg.ProxyEnabled {
+		var proxyDedup proxy.Deduper
+		if dedupB != nil {
+			proxyDedup = cache.NewStore(dedupB, "bre:proxy:", cfg.CacheOpTimeout)
+		} else {
+			slog.Warn("proxy in-flight dedup disabled: no shared cache backend; sibling endpoints may each proxy the same gap (use -cache-backend redis|aerospike)")
+		}
+		proxyClient = proxy.New(proxy.Config{
+			Upstreams:    cfg.UpstreamRetryEndpoints,
+			Timeout:      cfg.ProxyTimeout,
+			MaxEndpoints: cfg.ProxyMaxEndpoints,
+			DedupWindow:  cfg.ProxyDedupWindow,
+			Workers:      cfg.ProxyWorkers,
+			QueueDepth:   cfg.ProxyQueue,
+			Dedup:        proxyDedup,
+			Cache:        c,
+			Retrans:      retrans,
+			TTLs: proxy.TTLConfig{
+				Tx:      cfg.CacheTTLTx,
+				Block:   cfg.CacheTTLBlock,
+				Subtree: cfg.CacheTTLSubtree,
+				Anchor:  cfg.CacheTTLAnchor,
+			},
+			Rec: rec,
+		})
+		srv.SetProxy(proxyClient)
+	}
 
 	// Build ingress worker.
 	ing := ingress.New(mcIface, cfg.ListenPort, groups, c, rec, ingress.TTLConfig{
@@ -349,6 +389,12 @@ func run() error {
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Start NACK proxy workers (wired into the server above).
+	if proxyClient != nil {
+		proxyClient.Start(ctx)
+		slog.Info("NACK proxying enabled", "upstreams", cfg.UpstreamRetryEndpoints, "workers", cfg.ProxyWorkers)
+	}
 
 	// SSM: resolve the per-control-group bootstrap source lists. Resolvers
 	// run for the lifetime of ctx; OnChange triggers will not propagate
@@ -426,6 +472,9 @@ func run() error {
 		}
 		if cfg.BeaconFlagsDraining {
 			flags |= beacon.FlagDraining
+		}
+		if cfg.ProxyEnabled {
+			flags |= beacon.FlagHasParent
 		}
 		host := cfg.InstanceID
 		if host == "" {

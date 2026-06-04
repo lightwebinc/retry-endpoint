@@ -113,14 +113,20 @@ This is the one hole the verbatim bridge does not close: completeness of the
 upstream stream (after the listener's own NACK recovery) guarantees the listener
 *had* the frame, not that it *emitted* it. Mitigations, in preference order:
 
-1. **Redundant bridge listeners.** Run ≥ 2 listeners bridging the same
+1. **NACK proxying (self-healing).** Enable `-proxy-enabled` with
+   `-upstream-retry-endpoints` so the downstream endpoint recovers cache misses
+   from an upstream endpoint and re-serves the downstream domain — no
+   per-consumer config. See [NACK proxying](#nack-proxying-cross-domain-recovery)
+   below.
+2. **Redundant bridge listeners.** Run ≥ 2 listeners bridging the same
    upstream→downstream over independent egress paths. A single egress failure no
    longer creates a domain-wide hole — another bridge emits the frame, and both
    the downstream consumers and the downstream retry-endpoint receive it. Pair
    with the listener's egress dedup (shared `-deployment-id` + Redis) so
-   consumers do not see duplicates. This is the only mitigation that keeps
-   recovery entirely inside the downstream domain.
-2. **Upstream fallback tier.** Give downstream consumers a higher-`Tier`
+   consumers do not see duplicates. Keeps recovery entirely inside the
+   downstream domain and also covers control-plane frames (which proxying does
+   not).
+3. **Upstream fallback tier.** Give downstream consumers a higher-`Tier`
    registry entry (a static `-retry-endpoints` seed) pointing at an *upstream*
    retry-endpoint running `-beacon-flags-unicast=true`. On downstream-MISS
    escalation the consumer reaches back across the domain boundary; the upstream
@@ -128,11 +134,47 @@ upstream stream (after the listener's own NACK recovery) guarantees the listener
    the failed bridge — unicast-retransmits the verbatim frame. Requires IP
    reachability and that the frame is still within the upstream cache TTL.
 
-> **Not currently available:** NACK proxying — a downstream retry-endpoint
-> recovering a cache miss from upstream to repopulate its own cache and then
-> serve it — is not implemented. It would let the downstream domain self-heal
-> without per-consumer upstream-fallback config; today the mitigations above are
-> the supported options.
+### NACK proxying (cross-domain recovery)
+
+When `-proxy-enabled` is set, a local cache miss triggers an **asynchronous**
+recovery from an upstream retry-endpoint (the frame's true origin cache),
+re-caching the frame and serving the whole downstream domain. This closes the
+"frames the listener never emitted" hole without per-consumer fallback config.
+
+```text
+downstream consumer        downstream retry-EP            upstream retry-EP
+        │ (1) NACK ───────────────▶│ cache miss                       │
+        │◀──────── MISS ───────────│ (2) NACK (FlagProxied) ─────────▶│ cache hit
+        │                          │◀──── (3) unicast frame ──────────│
+        │◀═ (4) multicast retransmit into downstream domain ══════════│
+        │   gap auto-fills (nack.Tracker.Observe)
+```
+
+- **Async cache-warm:** the server returns MISS immediately and enqueues a
+  bounded recovery job (`-proxy-workers`, `-proxy-queue`); no NACK worker is held.
+- **Unicast return channel:** the downstream endpoint is not joined to the
+  upstream shard groups, so the recovered frame must come back by unicast. A NACK
+  carrying `FlagProxied` is always served a unicast copy regardless of the
+  upstream's retransmit mode (so the upstream does **not** strictly need
+  `-beacon-flags-unicast`, though enabling it is harmless).
+- **One-hop bound:** `FlagProxied` (NACK Flags bit `0x01`) stops an upstream
+  endpoint from re-proxying. Such requests are served from local cache only.
+- **Discovery is static:** upstreams are listed in `-upstream-retry-endpoints`
+  (a separated downstream domain generally cannot receive upstream beacons).
+- **Sibling dedup:** with a shared cache backend (`redis`/`aerospike`) an
+  in-flight SETNX claim (`bre:proxy:` prefix, `-proxy-dedup-window` TTL) ensures
+  only one downstream endpoint recovers a given gap; with `memory` the claim is
+  per-process and siblings may each proxy (logged at startup).
+- **Scope:** BRC-124/128 tx frames (the bridged hot path). Control-plane frames
+  are not bridged onto the downstream domain, so use redundant bridges for them.
+- **Metrics:** `bre_proxy_requests_total`, `bre_proxy_recovered_total`,
+  `bre_proxy_failed_total{reason}`, `bre_proxy_inflight_dedup_total`,
+  `bre_proxy_queue_dropped_total`. The endpoint also advertises ADVERT
+  `HasParent` (`0x0002`) while proxying is enabled.
+
+**Operational note:** all proxied NACKs share the downstream endpoint's source
+IP, so the upstream's per-IP rate limit (`-rl-ip-rate`) may throttle a large
+recovery burst — raise it or exempt proxy source IPs upstream.
 
 ## SSM (RFC 4607) mode
 
@@ -276,10 +318,18 @@ gap is auto-closed inline, before the next sweeper tick.
 ### Unicast retransmit
 
 When unicast retransmit is enabled, the NACK server sends the raw frame directly
-back to the listener that issued the NACK, using the source address from the
-incoming datagram. This guarantees delivery to the specific listener without
-relying on multicast fabric propagation, but does not benefit other listeners
-that may have the same gap.
+back to the requester via `retransmit.RetransmitUnicast` on a dedicated UDP
+socket source-bound to the advertised NACK address (so the requester's registry
+filter matches). It uses the source address from the incoming datagram. This
+guarantees delivery to the specific requester without relying on multicast
+fabric propagation, but does not benefit other listeners with the same gap.
+Unlike the multicast path it applies **no** cross-instance dedup — each
+requester needs its own copy.
+
+A NACK carrying `FlagProxied` (a cross-domain proxy request — see
+[NACK proxying](#nack-proxying-cross-domain-recovery)) is **always** served a
+unicast copy, regardless of `-beacon-flags-unicast`, because the requesting
+endpoint receives the frame only through this return channel.
 
 Both modes can fire for the same NACK when both beacon flags are set.
 
@@ -361,6 +411,7 @@ retry-endpoint/
   cache/           Cache interface + memory (freecache) and redis backends
   server/          UDP NACK receive pool; rate-limit → cache lookup → retransmit
   retransmit/      multicast + unicast retransmit egress; cross-instance dedup
+  proxy/           cross-domain NACK proxying: recover misses from upstream, re-cache
   beacon/          ADVERT beacon sender; IPV6_MULTICAST_IF binding
   ratelimit/       four-tier rate limiter (IP, HashKey, SeqNum, group)
   metrics/         OTel + Prometheus instrumentation (bre_ prefix)

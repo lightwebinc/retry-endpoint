@@ -115,6 +115,16 @@ type Config struct {
 	EgressPort   int           // Destination UDP port for retransmitted frames
 	DedupWindow  time.Duration // Deduplication window (default 60s)
 
+	// NACK proxying (cross-domain recovery). When enabled, a cache miss
+	// triggers an asynchronous recovery from an upstream retry-endpoint.
+	ProxyEnabled           bool
+	UpstreamRetryEndpoints []string      // upstream NACK targets (host:port)
+	ProxyTimeout           time.Duration // per-upstream response wait
+	ProxyMaxEndpoints      int           // upstream endpoints tried per gap (0 = all)
+	ProxyDedupWindow       time.Duration // in-flight SETNX claim TTL
+	ProxyWorkers           int           // recovery worker goroutines
+	ProxyQueue             int           // recovery job queue depth
+
 	// Rate limiting
 	RLIPRate         float64       // IP rate limit (tokens per second)
 	RLIPBurst        int           // IP burst size
@@ -210,6 +220,21 @@ func Load() (*Config, error) {
 		"destination UDP port for retransmitted frames")
 	flag.DurationVar(&c.DedupWindow, "dedup-window", envDuration("DEDUP_WINDOW", 60*time.Second),
 		"retransmission deduplication window")
+
+	flag.BoolVar(&c.ProxyEnabled, "proxy-enabled", envBool("PROXY_ENABLED", false),
+		"recover cache misses from an upstream retry-endpoint (cross-domain NACK proxying)")
+	upstreamFlag := flag.String("upstream-retry-endpoints", envStr("UPSTREAM_RETRY_ENDPOINTS", ""),
+		"CSV of upstream retry-endpoint NACK targets (host:port); required when -proxy-enabled")
+	flag.DurationVar(&c.ProxyTimeout, "proxy-timeout", envDuration("PROXY_TIMEOUT", 300*time.Millisecond),
+		"per-upstream response wait for a proxied NACK")
+	flag.IntVar(&c.ProxyMaxEndpoints, "proxy-max-endpoints", envInt("PROXY_MAX_ENDPOINTS", 0),
+		"upstream endpoints tried per gap (0 = all)")
+	flag.DurationVar(&c.ProxyDedupWindow, "proxy-dedup-window", envDuration("PROXY_DEDUP_WINDOW", 60*time.Second),
+		"in-flight SETNX claim TTL deduping sibling endpoints (shared cache backend only)")
+	flag.IntVar(&c.ProxyWorkers, "proxy-workers", envInt("PROXY_WORKERS", 4),
+		"proxy recovery worker goroutines")
+	flag.IntVar(&c.ProxyQueue, "proxy-queue", envInt("PROXY_QUEUE", 1024),
+		"proxy recovery job queue depth")
 
 	flag.Float64Var(&c.RLIPRate, "rl-ip-rate", envFloat("RL_IP_RATE", 100),
 		"IP rate limit (tokens per second)")
@@ -456,6 +481,31 @@ func Load() (*Config, error) {
 	}
 	if len(c.EgressIfaces) == 0 {
 		return nil, fmt.Errorf("at least one egress interface must be specified via -egress-iface")
+	}
+
+	// NACK proxying.
+	c.UpstreamRetryEndpoints = splitCSV(*upstreamFlag)
+	if c.ProxyEnabled {
+		if len(c.UpstreamRetryEndpoints) == 0 {
+			return nil, fmt.Errorf("proxy-enabled requires at least one -upstream-retry-endpoints (host:port)")
+		}
+		for _, ep := range c.UpstreamRetryEndpoints {
+			if _, _, err := net.SplitHostPort(ep); err != nil {
+				return nil, fmt.Errorf("invalid -upstream-retry-endpoints entry %q: %w", ep, err)
+			}
+		}
+		if c.ProxyTimeout <= 0 {
+			return nil, fmt.Errorf("proxy-timeout must be > 0, got %s", c.ProxyTimeout)
+		}
+		if c.ProxyMaxEndpoints < 0 {
+			return nil, fmt.Errorf("proxy-max-endpoints must be >= 0, got %d", c.ProxyMaxEndpoints)
+		}
+		if c.ProxyWorkers <= 0 {
+			c.ProxyWorkers = 4
+		}
+		if c.ProxyQueue <= 0 {
+			return nil, fmt.Errorf("proxy-queue must be > 0, got %d", c.ProxyQueue)
+		}
 	}
 
 	// Validate beacon scope and tier/preference ranges.

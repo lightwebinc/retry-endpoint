@@ -259,6 +259,54 @@ Set to match or exceed `-cache-ttl` to prevent double-retransmit on cache miss.
 
 ---
 
+## NACK Proxying (cross-domain recovery)
+
+When enabled, a local cache miss triggers an asynchronous recovery from an
+upstream retry-endpoint, re-caching the frame and multicast-retransmitting it
+into this endpoint's domain. This closes the "frames the bridging listener never
+emitted" hole for a downstream domain. See the architecture doc's
+[NACK proxying](architecture.md#nack-proxying-cross-domain-recovery) section.
+
+### `-proxy-enabled` / `PROXY_ENABLED` (default: `false`)
+
+Master switch. When `true`, `-upstream-retry-endpoints` is required.
+
+### `-upstream-retry-endpoints` / `UPSTREAM_RETRY_ENDPOINTS` (default: empty)
+
+Comma-separated `host:port` list of upstream retry-endpoint NACK addresses to
+recover misses from. Tried in order until one returns the frame. These are the
+endpoints on the upstream fabric that cached the frame directly from the proxy.
+
+### `-proxy-timeout` / `PROXY_TIMEOUT` (default: `300ms`)
+
+Per-upstream wait for the unicast frame return before trying the next upstream.
+
+### `-proxy-max-endpoints` / `PROXY_MAX_ENDPOINTS` (default: `0`)
+
+Maximum upstream endpoints tried per gap. `0` = all configured upstreams.
+
+### `-proxy-dedup-window` / `PROXY_DEDUP_WINDOW` (default: `60s`)
+
+TTL of the in-flight SETNX claim (`bre:proxy:` prefix) that prevents sibling
+downstream endpoints from all proxying the same gap. Effective only with a
+shared cache backend (`redis`/`aerospike`); with `memory` the claim is
+per-process and a startup warning is logged.
+
+### `-proxy-workers` / `PROXY_WORKERS` (default: `4`)
+
+Recovery worker goroutines draining the job queue.
+
+### `-proxy-queue` / `PROXY_QUEUE` (default: `1024`)
+
+Recovery job queue depth. Jobs are dropped (counted `bre_proxy_queue_dropped_total`)
+when full, since the requester already received MISS and will retry/escalate.
+
+> **Upstream rate limits:** all proxied NACKs share this endpoint's source IP.
+> The upstream's per-IP limiter (`-rl-ip-rate`) may throttle a large recovery
+> burst — raise it or exempt proxy source IPs upstream.
+
+---
+
 ## Rate Limiting
 
 Four tiers applied in order. Tiers 1–3 are pre-lookup; drops are silent (no
@@ -448,8 +496,14 @@ and a `bre_host_info` gauge.
 | `bre_cache_hits_total`                                           | NACK requests resolved from cache                                   |
 | `bre_cache_misses_total`                                         | NACK requests with no cached frame                                  |
 | `bre_retransmits_total`                                          | Frames sent to multicast egress                                     |
+| `bre_unicast_retransmits_total`                                  | Frames sent unicast back to the NACK requester                      |
 | `bre_retransmit_dedup_total`                                     | Retransmits skipped by cross-instance dedup (requires `REDIS_ADDR`) |
 | `bre_rate_limit_drops_total{level=ip\|hashkey\|sequence\|group}` | Requests dropped (or retransmit suppressed) by rate limiter tier    |
+| `bre_proxy_requests_total`                                       | Cross-domain proxy recovery jobs started                            |
+| `bre_proxy_recovered_total`                                      | Frames recovered from upstream and re-cached                        |
+| `bre_proxy_failed_total{reason}`                                 | Proxy jobs that found no frame upstream                             |
+| `bre_proxy_inflight_dedup_total`                                 | Proxy jobs skipped (sibling already claimed the gap)                |
+| `bre_proxy_queue_dropped_total`                                  | Proxy jobs dropped because the queue was full                       |
 
 ---
 

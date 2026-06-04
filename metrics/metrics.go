@@ -50,9 +50,17 @@ type Recorder struct {
 	// Server metrics
 	nackRequests       metric.Int64Counter
 	retransmits        metric.Int64Counter
+	unicastRetransmits metric.Int64Counter
 	retransmitDedup    metric.Int64Counter
 	responsesSent      metric.Int64Counter // labelled type={ack,miss}
 	responseSendErrors metric.Int64Counter
+
+	// NACK proxy metrics
+	proxyRequests      metric.Int64Counter
+	proxyRecovered     metric.Int64Counter
+	proxyFailed        metric.Int64Counter // labelled reason
+	proxyInflightDedup metric.Int64Counter
+	proxyQueueDropped  metric.Int64Counter
 
 	// Rate limit metrics
 	rateLimitDrops metric.Int64Counter
@@ -166,8 +174,32 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		metric.WithDescription("Frames retransmitted")); err != nil {
 		return nil, err
 	}
+	if r.unicastRetransmits, err = meter.Int64Counter("bre_unicast_retransmits_total",
+		metric.WithDescription("Frames retransmitted directly back to the NACK requester (unicast)")); err != nil {
+		return nil, err
+	}
 	if r.retransmitDedup, err = meter.Int64Counter("bre_retransmit_dedup_total",
 		metric.WithDescription("Retransmissions dropped due to deduplication")); err != nil {
+		return nil, err
+	}
+	if r.proxyRequests, err = meter.Int64Counter("bre_proxy_requests_total",
+		metric.WithDescription("Cross-domain NACK proxy recovery jobs started")); err != nil {
+		return nil, err
+	}
+	if r.proxyRecovered, err = meter.Int64Counter("bre_proxy_recovered_total",
+		metric.WithDescription("Frames recovered from an upstream endpoint and re-cached")); err != nil {
+		return nil, err
+	}
+	if r.proxyFailed, err = meter.Int64Counter("bre_proxy_failed_total",
+		metric.WithDescription("Proxy recovery jobs that found no frame upstream")); err != nil {
+		return nil, err
+	}
+	if r.proxyInflightDedup, err = meter.Int64Counter("bre_proxy_inflight_dedup_total",
+		metric.WithDescription("Proxy jobs skipped because a sibling endpoint already claimed the gap")); err != nil {
+		return nil, err
+	}
+	if r.proxyQueueDropped, err = meter.Int64Counter("bre_proxy_queue_dropped_total",
+		metric.WithDescription("Proxy recovery jobs dropped because the queue was full")); err != nil {
 		return nil, err
 	}
 	if r.responsesSent, err = meter.Int64Counter("bre_responses_sent_total",
@@ -228,8 +260,40 @@ func (r *Recorder) Retransmit() {
 	r.retransmits.Add(context.Background(), 1)
 }
 
+func (r *Recorder) UnicastRetransmit() {
+	r.unicastRetransmits.Add(context.Background(), 1)
+}
+
 func (r *Recorder) RetransmitDedup() {
 	r.retransmitDedup.Add(context.Background(), 1)
+}
+
+// ProxyRequest records a cross-domain proxy recovery job start.
+func (r *Recorder) ProxyRequest() {
+	r.proxyRequests.Add(context.Background(), 1)
+}
+
+// ProxyRecovered records a frame recovered from upstream and re-cached.
+func (r *Recorder) ProxyRecovered() {
+	r.proxyRecovered.Add(context.Background(), 1)
+}
+
+// ProxyFailed records a proxy job that found no frame upstream. reason is a
+// low-cardinality label (e.g. "exhausted").
+func (r *Recorder) ProxyFailed(reason string) {
+	r.proxyFailed.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("reason", reason),
+	))
+}
+
+// ProxyInflightDedup records a proxy job skipped due to a sibling's in-flight claim.
+func (r *Recorder) ProxyInflightDedup() {
+	r.proxyInflightDedup.Add(context.Background(), 1)
+}
+
+// ProxyQueueDropped records a proxy job dropped because the queue was full.
+func (r *Recorder) ProxyQueueDropped() {
+	r.proxyQueueDropped.Add(context.Background(), 1)
 }
 
 // ResponseSent records an ACK or MISS datagram successfully written to the

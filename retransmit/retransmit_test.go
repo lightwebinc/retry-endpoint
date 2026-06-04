@@ -92,6 +92,54 @@ func TestOpen_NoIfaces(t *testing.T) {
 	if err := r.Open(); err != nil {
 		t.Errorf("Open with no ifaces should succeed, got %v", err)
 	}
+	_ = r.Close()
+}
+
+func TestRetransmitUnicast_DeliversFrame(t *testing.T) {
+	// A listening UDP socket stands in for the requester.
+	conn, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	dst := conn.LocalAddr().(*net.UDPAddr)
+
+	r := New(nil, nil, 0, 0, nil, nil, false)
+	if err := r.Open(); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	want := []byte("frame-bytes-verbatim")
+	if err := r.RetransmitUnicast(want, dst); err != nil {
+		t.Fatalf("unicast: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1500)
+	n, _, err := conn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(buf[:n]) != string(want) {
+		t.Errorf("got %q, want %q", buf[:n], want)
+	}
+}
+
+func TestRetransmitUnicast_Errors(t *testing.T) {
+	r := New(nil, nil, 0, 0, nil, nil, false)
+	// Socket not open yet.
+	if err := r.RetransmitUnicast([]byte("x"), &net.UDPAddr{IP: net.IPv6loopback, Port: 1}); err == nil {
+		t.Error("expected error when socket not open")
+	}
+	if err := r.Open(); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	// Nil dst.
+	if err := r.RetransmitUnicast([]byte("x"), nil); err == nil {
+		t.Error("expected error for nil dst")
+	}
 }
 
 func TestOpen_LoopbackIface(t *testing.T) {

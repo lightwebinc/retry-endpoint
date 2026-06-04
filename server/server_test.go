@@ -45,14 +45,25 @@ func (m *mockCache) Delete(key []byte) error {
 func (m *mockCache) Close() error { return nil }
 
 type mockRetransmitter struct {
-	mu      sync.Mutex
-	called  bool
-	lastRaw []byte
+	mu             sync.Mutex
+	called         bool
+	lastRaw        []byte
+	unicastCalled  bool
+	unicastLastDst *net.UDPAddr
 }
 
 func (m *mockRetransmitter) Retransmit(raw []byte, _ [32]byte) error {
 	m.mu.Lock()
 	m.called = true
+	m.lastRaw = append([]byte{}, raw...)
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *mockRetransmitter) RetransmitUnicast(raw []byte, dst *net.UDPAddr) error {
+	m.mu.Lock()
+	m.unicastCalled = true
+	m.unicastLastDst = dst
 	m.lastRaw = append([]byte{}, raw...)
 	m.mu.Unlock()
 	return nil

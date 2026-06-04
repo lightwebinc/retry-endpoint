@@ -28,6 +28,9 @@ type Retransmitter struct {
 	debug       bool
 	log         *slog.Logger
 
+	unicastSrc  net.IP       // optional source IP for the unicast retransmit socket
+	unicastConn *net.UDPConn // opened in Open(); used by RetransmitUnicast
+
 	mu      sync.Mutex
 	sockets map[string]*net.UDPConn // iface name -> socket
 }
@@ -55,7 +58,12 @@ func New(
 	}
 }
 
-// Open opens egress sockets for all interfaces.
+// SetUnicastSource sets the source IP bound on the unicast retransmit socket.
+// Set it to the advertised NACK address so the frame returned to a requester
+// is sourced from the address its registry expects. Must be called before Open.
+func (r *Retransmitter) SetUnicastSource(ip net.IP) { r.unicastSrc = ip }
+
+// Open opens egress sockets for all interfaces plus the unicast retransmit socket.
 func (r *Retransmitter) Open() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -68,6 +76,13 @@ func (r *Retransmitter) Open() error {
 		r.sockets[iface.Name] = conn
 		r.log.Info("egress socket opened", "iface", iface.Name)
 	}
+
+	// Unicast retransmit socket (port 0; source-bound to unicastSrc when set).
+	uc, err := net.ListenUDP("udp6", &net.UDPAddr{IP: r.unicastSrc})
+	if err != nil {
+		return fmt.Errorf("open unicast retransmit socket: %w", err)
+	}
+	r.unicastConn = uc
 	return nil
 }
 
@@ -83,7 +98,34 @@ func (r *Retransmitter) Close() error {
 			lastErr = err
 		}
 	}
+	if r.unicastConn != nil {
+		if err := r.unicastConn.Close(); err != nil {
+			r.log.Warn("close unicast retransmit socket error", "err", err)
+			lastErr = err
+		}
+	}
 	return lastErr
+}
+
+// RetransmitUnicast sends a cached frame verbatim back to a single requester
+// (dst), the source address of an incoming NACK. Unlike the multicast path it
+// does NOT apply cross-instance dedup — each requester needs its own copy, and
+// the cross-domain NACK proxy depends on this as its only return channel. dst
+// must be non-nil.
+func (r *Retransmitter) RetransmitUnicast(raw []byte, dst *net.UDPAddr) error {
+	if dst == nil {
+		return fmt.Errorf("retransmit unicast: nil dst")
+	}
+	if r.unicastConn == nil {
+		return fmt.Errorf("retransmit unicast: socket not open")
+	}
+	if _, err := r.unicastConn.WriteToUDP(raw, dst); err != nil {
+		return err
+	}
+	if r.debug {
+		r.log.Debug("frame retransmitted (unicast)", "dst", dst.String())
+	}
+	return nil
 }
 
 // Retransmit sends a cached frame to the multicast network.

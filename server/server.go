@@ -15,6 +15,7 @@ import (
 
 	"github.com/lightwebinc/retry-endpoint/cache"
 	"github.com/lightwebinc/retry-endpoint/metrics"
+	"github.com/lightwebinc/retry-endpoint/proxy"
 	"github.com/lightwebinc/retry-endpoint/ratelimit"
 )
 
@@ -44,12 +45,22 @@ type Server struct {
 	suppressACK  bool          // if true, do not send ACK responses
 	suppressMISS bool          // if true, do not send MISS responses
 	shardEngine  *shard.Engine // for post-lookup group index derivation; nil = skip group limiter
+	retransmitMC bool          // multicast retransmit on cache hit (default true)
+	retransmitUC bool          // unicast retransmit (frame back to requester) on cache hit
+	proxy        ProxyEnqueuer // nil = NACK proxying disabled
 	log          *slog.Logger
 }
 
 // Retransmitter is the interface for retransmitting cached frames.
 type Retransmitter interface {
 	Retransmit(raw []byte, txID [32]byte) error
+	RetransmitUnicast(raw []byte, dst *net.UDPAddr) error
+}
+
+// ProxyEnqueuer submits a cross-domain recovery job on a cache miss.
+// *proxy.Client satisfies it.
+type ProxyEnqueuer interface {
+	Enqueue(hashKey, seq uint64, subtree [32]byte) bool
 }
 
 // New constructs a Server.
@@ -63,16 +74,29 @@ func New(
 	debug bool,
 ) *Server {
 	return &Server{
-		port:        port,
-		cache:       cache,
-		rateLimiter: rateLimiter,
-		rec:         rec,
-		retransmit:  retransmit,
-		workers:     workers,
-		debug:       debug,
-		log:         slog.Default().With("component", "server"),
+		port:         port,
+		cache:        cache,
+		rateLimiter:  rateLimiter,
+		rec:          rec,
+		retransmit:   retransmit,
+		workers:      workers,
+		debug:        debug,
+		retransmitMC: true, // preserve default behaviour until SetRetransmitModes is called
+		log:          slog.Default().With("component", "server"),
 	}
 }
+
+// SetRetransmitModes selects which retransmit paths fire on a cache hit. These
+// mirror the advertised beacon flags. Multicast defaults to true; unicast to
+// false. A proxied NACK is always served a unicast copy regardless of uc.
+func (s *Server) SetRetransmitModes(multicast, unicast bool) {
+	s.retransmitMC = multicast
+	s.retransmitUC = unicast
+}
+
+// SetProxy enables cross-domain NACK proxying: on a local cache miss the server
+// enqueues a recovery job. nil (the default) disables proxying.
+func (s *Server) SetProxy(p ProxyEnqueuer) { s.proxy = p }
 
 // SetSuppressACK disables ACK responses (for high-volume deployments).
 func (s *Server) SetSuppressACK(v bool) { s.suppressACK = v }
@@ -196,10 +220,15 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		return
 	}
 
-	// datagram[7] = Flags (reserved, ignored)
+	// datagram[7] = Flags. FlagProxied marks a NACK already recovered on behalf
+	// of a downstream domain; such requests are served locally but never
+	// re-proxied (bounds the chain to one hop, BRC-126).
+	proxied := datagram[7]&proxy.FlagProxied != 0
 	hashKey := binary.BigEndian.Uint64(datagram[8:16])
 	startSeq := binary.BigEndian.Uint64(datagram[16:24])
 	endSeq := binary.BigEndian.Uint64(datagram[24:32])
+	var subtreeID [32]byte
+	copy(subtreeID[:], datagram[32:64])
 
 	// For now only single-frame retrieval is implemented (StartSeq == EndSeq).
 	// Range requests (StartSeq < EndSeq) are reserved for future use.
@@ -261,6 +290,11 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		if !s.suppressMISS && src != nil {
 			s.sendResponse(conn, src, msgTypeMISS, 0, 0)
 		}
+		// Cross-domain recovery: enqueue an async upstream fetch (cache-warm).
+		// Never re-proxy an already-proxied request (one-hop bound).
+		if s.proxy != nil && !proxied {
+			s.proxy.Enqueue(hashKey, startSeq, subtreeID)
+		}
 		return
 	}
 
@@ -292,12 +326,24 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 	}
 
 	if !groupThrottled {
-		if err := s.retransmit.Retransmit(raw, txID); err != nil {
-			s.log.Error("retransmit error", "err", err)
-			return
+		if s.retransmitMC {
+			if err := s.retransmit.Retransmit(raw, txID); err != nil {
+				s.log.Error("retransmit error", "err", err)
+				return
+			}
+			if s.rec != nil {
+				s.rec.Retransmit()
+			}
 		}
-		if s.rec != nil {
-			s.rec.Retransmit()
+		// Unicast the frame back to the requester when unicast mode is on, or
+		// always for a proxied NACK — a cross-domain proxy receives the frame
+		// only via this return channel (it is not joined to our shard groups).
+		if (s.retransmitUC || proxied) && src != nil {
+			if err := s.retransmit.RetransmitUnicast(raw, src); err != nil {
+				s.log.Error("unicast retransmit error", "err", err)
+			} else if s.rec != nil {
+				s.rec.UnicastRetransmit()
+			}
 		}
 	}
 
