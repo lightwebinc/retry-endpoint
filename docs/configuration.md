@@ -114,7 +114,7 @@ and relies on NACK-based retransmission for subtree data fragments.
 ## Cache
 
 The frame cache uses the modular `shard-common/cache` backend. See
-[`bsv-multicast/docs/ModularCacheBackend/`](../../bsv-multicast/docs/ModularCacheBackend/modular-cache-backend.md)
+[`shard-common/docs/cache-backend.md`](https://github.com/lightwebinc/shard-common/blob/main/docs/cache-backend.md)
 for the interface and backend matrix.
 
 ### `-cache-backend` / `CACHE_BACKEND` (default: `memory`)
@@ -470,7 +470,7 @@ Metric export interval for the OTLP push exporter. Ignored when
 Structured-log output: `text` (stderr, dev default) or `json` (one JSON object
 per line on stdout, for fleet aggregation). Every line carries the
 `service.{name,instance.id,version}` identity triple shared with OTLP metrics.
-See the [Unified Logging Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/UnifiedLogging/unified-logging-plan.md).
+See the [Unified Logging Plan](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md).
 
 ### `-log-level` / `LOG_LEVEL` (default: `info`)
 

@@ -399,7 +399,7 @@ on stdout; `-log-level` is runtime-togglable via `POST /loglevel` and SIGHUP. A
 one-shot `host.inventory` event and a `bre_host_info` gauge are emitted at
 startup. Tracing is opt-in (`-trace-sampling > 0` + `-otlp-endpoint`) and
 covers the NACK → retransmit control-plane flow, never the cache hot path. See
-the [Unified Logging Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/UnifiedLogging/unified-logging-plan.md).
+the [Unified Logging Plan](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md).
 
 ## Package structure
 
