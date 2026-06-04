@@ -71,7 +71,7 @@ type Config struct {
 	//   listeners pre-declare this retry-endpoint in sources.bootstrap.beacon
 	// PublishersManifest: optional URL or local path for static manifest
 	//   source-set bootstrap; defer to operator-supplied static list for now
-	// SSMBootstrap{Beacon,Manifest,SubtreeAnnounce}: per-control-group
+	// SSMBootstrap{Beacon,Manifest,SubtreeGroupAnnounce}: per-control-group
 	//   bootstrap source lists (IPv6 literals or DNS names; resolved via
 	//   the shared bootstrap.Resolver at startup and refreshed periodically).
 	//   Used to (S,G)-join the matching control group.
@@ -164,7 +164,7 @@ type Config struct {
 	BeaconNACKAddr       string // explicit IPv6 unicast NACK address for ADVERT; auto-detected if empty
 
 	// BRC-132 subtree data
-	SubtreeDataEnabled bool // join GroupSubtreeAnnounce (0xFFFB) for subtree data caching
+	SubtreeDataEnabled bool // join GroupSubtreeDataAnnounce (0xFFFB) for subtree data caching
 
 	// Response suppression (BRC-126)
 	SuppressACK  bool // do not emit ACK responses
@@ -277,7 +277,7 @@ func Load() (*Config, error) {
 		"DNS re-resolve interval for SSM bootstrap entries")
 
 	flag.BoolVar(&c.SubtreeDataEnabled, "subtree-data-enabled", envBool("SUBTREE_DATA_ENABLED", false),
-		"enable BRC-132 subtree data caching: join GroupSubtreeAnnounce (0xFFFB) group")
+		"enable BRC-132 subtree data caching: join GroupSubtreeDataAnnounce (0xFFFB) group")
 	flag.BoolVar(&c.Debug, "debug", envBool("DEBUG", false),
 		"enable per-packet debug logging; deprecated alias for -log-level=debug")
 	flag.StringVar(&c.LogFormat, "log-format", envStr("LOG_FORMAT", "text"),

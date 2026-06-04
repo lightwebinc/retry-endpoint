@@ -43,7 +43,7 @@ import (
 // Mapping (BRC-129 indices):
 //
 //	GroupBeacon            (0xFFFD) → SSMBootstrapBeacon (retry-endpoint pods)
-//	GroupSubtreeAnnounce   (0xFFFB) → SSMBootstrapSubtreeAnn
+//	GroupSubtreeDataAnnounce   (0xFFFB) → SSMBootstrapSubtreeAnn
 //	GroupSubtreeGroupAnn   (0xFFFC) → SSMBootstrapSubtreeAnn (same source set)
 //	GroupBlockBroadcast    (0xFFFE) → SSMBootstrapManifest (block-bcast follows manifest emitters)
 //	data-plane shard groups        → SSMPublishersStatic (lab) or manifest
@@ -79,7 +79,7 @@ func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.Grou
 		return nil, fmt.Errorf("beacon: %w", err)
 	}
 	// Subtree-announce + subtree-group-announce share the same emitter set.
-	subAnnIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupSubtreeAnnounce)
+	subAnnIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupSubtreeDataAnnounce)
 	subGrpAnnIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupSubtreeGroupAnnounce)
 	if err := resolve(cfg.SSMBootstrapSubtreeAnn, gs, subAnnIP, subGrpAnnIP); err != nil {
 		return nil, fmt.Errorf("subtree-announce: %w", err)
@@ -548,7 +548,7 @@ func buildGroups(cfg *config.Config, engine *shard.Engine) ([]*net.UDPAddr, erro
 
 	// Join the subtree data group (FF0X::B:FFFB) when BRC-132 caching is enabled.
 	if cfg.SubtreeDataEnabled {
-		subtreeDataIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupSubtreeAnnounce)
+		subtreeDataIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupSubtreeDataAnnounce)
 		groups = append(groups, &net.UDPAddr{IP: subtreeDataIP, Port: cfg.ListenPort})
 	}
 

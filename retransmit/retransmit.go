@@ -153,7 +153,7 @@ func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 
 	// Derive multicast group based on frame version:
 	// - V4 (FrameVerV4): BRC-131 block control → GroupBlockBroadcast (0xFFFE)
-	// - V5 (FrameVerV5): BRC-132 subtree data  → GroupSubtreeAnnounce (0xFFFB)
+	// - V5 (FrameVerV5): BRC-132 subtree data  → GroupSubtreeDataAnnounce (0xFFFB)
 	// - All others:      shard group derived from TxID
 	var groupAddr *net.UDPAddr
 	if len(raw) >= 7 {
@@ -162,7 +162,7 @@ func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 			ctrlIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupBlockBroadcast)
 			groupAddr = &net.UDPAddr{IP: ctrlIP, Port: r.egressPort}
 		case frame.FrameVerV5:
-			subtreeIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupSubtreeAnnounce)
+			subtreeIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupSubtreeDataAnnounce)
 			groupAddr = &net.UDPAddr{IP: subtreeIP, Port: r.egressPort}
 		case frame.FrameVerV6:
 			ctrlIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupBlockBroadcast)
