@@ -7,6 +7,8 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/lightwebinc/retry-endpoint)](https://goreportcard.com/report/github.com/lightwebinc/retry-endpoint)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
+> Part of the [**BSV Layered Multicast**](https://github.com/lightwebinc/bsv-multicast) open-source project — see the main repository for the full architecture, design docs, and BRC specifications.
+
 Caching endpoint for NACK-based retransmission in the BSV multicast pipeline.
 Receives BRC-124/BRC-128 frames from the multicast fabric, caches them, and retransmits
 on demand to `shard-listener` nodes that detect sequence gaps.
