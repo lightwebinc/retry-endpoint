@@ -27,9 +27,21 @@ const ResponseSize = 16
 
 // MsgType constants for BRC-126 protocol messages.
 const (
-	msgTypeNACK byte = 0x10
-	msgTypeMISS byte = 0x11
-	msgTypeACK  byte = 0x12
+	msgTypeNACK      byte = 0x10
+	msgTypeMISS      byte = 0x11
+	msgTypeACK       byte = 0x12
+	msgTypeThrottled byte = 0x13 // congestion signal: back off this gap, do not escalate
+)
+
+// Throttle backoff hint buckets, encoded in the low nibble of the THROTTLED
+// response Flags byte. The listener computes a suggested hold of
+// ThrottleHintBase << bucket (see BRC-126). Sequence-level throttling implies a
+// retransmit for this exact gap was just served (and is propagating via
+// multicast), so the hold is short; chain-level throttling means the source is
+// NACKing a whole flow too hard, so it backs off a little longer.
+const (
+	throttleBucketSequence byte = 2 // ~500ms at the 125ms base
+	throttleBucketChain    byte = 3 // ~1s
 )
 
 // Server receives NACK requests and coordinates retransmissions.
@@ -44,6 +56,7 @@ type Server struct {
 	debug        bool
 	suppressACK  bool          // if true, do not send ACK responses
 	suppressMISS bool          // if true, do not send MISS responses
+	throttleResp bool          // if true, answer honest-congestion throttles with a THROTTLED hint
 	shardEngine  *shard.Engine // for post-lookup group index derivation; nil = skip group limiter
 	retransmitMC bool          // multicast retransmit on cache hit (default true)
 	retransmitUC bool          // unicast retransmit (frame back to requester) on cache hit
@@ -103,6 +116,11 @@ func (s *Server) SetSuppressACK(v bool) { s.suppressACK = v }
 
 // SetSuppressMISS disables MISS responses.
 func (s *Server) SetSuppressMISS(v bool) { s.suppressMISS = v }
+
+// SetThrottleResponse enables THROTTLED replies on honest-congestion throttles
+// (sequence and chain tiers). The IP flood tier stays silent regardless, so a
+// spoofed-source flood is never answered. Off by default.
+func (s *Server) SetThrottleResponse(v bool) { s.throttleResp = v }
 
 // SetBindAddr sets the specific IPv6 address the NACK socket binds to.
 // When set, ACK/MISS responses are sourced from this address, avoiding
@@ -252,6 +270,13 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		if s.debug {
 			s.log.Debug("rate limited", "level", level)
 		}
+		// Honest-congestion signal for the sequence tier: a retransmit for this
+		// exact gap was just served and is propagating via multicast, so tell the
+		// listener to hold rather than time out and escalate. The IP tier is the
+		// flood/abuse tier — stay silent there (never answer a possible spoof).
+		if level == ratelimit.LevelSequence && s.throttleResp && src != nil {
+			s.sendThrottled(conn, src, throttleBucketSequence, startSeq)
+		}
 		return
 	}
 
@@ -262,6 +287,9 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		}
 		if s.debug {
 			s.log.Debug("rate limited", "level", ratelimit.LevelChain, "hash_key", hashKey)
+		}
+		if s.throttleResp && src != nil {
+			s.sendThrottled(conn, src, throttleBucketChain, startSeq)
 		}
 		return
 	}
@@ -353,6 +381,29 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 
 	if s.debug {
 		s.log.Debug("retransmitted frame", "txid", fmt.Sprintf("%x", txID[:8]), "seq_num", seqNum)
+	}
+}
+
+// sendThrottled sends a 16-byte THROTTLED response carrying a backoff-bucket
+// hint in the Flags byte. It echoes the requested SeqNum. The response (16B) is
+// smaller than the NACK (64B), so it cannot be used for bandwidth amplification.
+func (s *Server) sendThrottled(conn net.PacketConn, src *net.UDPAddr, bucket byte, seqNum uint64) {
+	var buf [ResponseSize]byte
+	binary.BigEndian.PutUint32(buf[0:4], frame.MagicBSV)
+	binary.BigEndian.PutUint16(buf[4:6], frame.ProtoVer)
+	buf[6] = msgTypeThrottled
+	buf[7] = bucket & 0x0F
+	binary.BigEndian.PutUint64(buf[8:16], seqNum)
+
+	if _, err := conn.WriteTo(buf[:], src); err != nil {
+		if s.rec != nil {
+			s.rec.ResponseSendError("throttled")
+		}
+		s.log.Warn("failed to send THROTTLED", "dst", src.String(), "err", err)
+		return
+	}
+	if s.rec != nil {
+		s.rec.ResponseSent("throttled")
 	}
 }
 

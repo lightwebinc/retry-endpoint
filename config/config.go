@@ -169,6 +169,11 @@ type Config struct {
 	// Response suppression (BRC-126)
 	SuppressACK  bool // do not emit ACK responses
 	SuppressMISS bool // do not emit MISS responses
+
+	// ThrottleResponse emits a THROTTLED hint on honest-congestion throttles
+	// (sequence/chain tiers) so listeners hold instead of timing out; the IP
+	// flood tier stays silent.
+	ThrottleResponse bool
 }
 
 // Load parses flags and environment variables, validates all values, and
@@ -327,6 +332,8 @@ func Load() (*Config, error) {
 		"suppress ACK responses (listeners fall back to timeout + backoff)")
 	flag.BoolVar(&c.SuppressMISS, "suppress-miss", envBool("SUPPRESS_MISS", false),
 		"suppress MISS responses")
+	flag.BoolVar(&c.ThrottleResponse, "rl-throttle-response", envBool("RL_THROTTLE_RESPONSE", false),
+		"reply to sequence/chain rate-limit throttles with a THROTTLED backoff hint (IP flood tier stays silent)")
 
 	flag.Parse()
 

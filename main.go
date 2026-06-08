@@ -343,6 +343,7 @@ func run() error {
 	srv.SetBindAddr(nackBindIP.String())
 	srv.SetSuppressACK(cfg.SuppressACK)
 	srv.SetSuppressMISS(cfg.SuppressMISS)
+	srv.SetThrottleResponse(cfg.ThrottleResponse)
 	srv.SetShardEngine(engine)
 	srv.SetRetransmitModes(cfg.BeaconFlagsMulticast, cfg.BeaconFlagsUnicast)
 
