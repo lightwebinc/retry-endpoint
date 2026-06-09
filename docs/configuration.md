@@ -352,7 +352,9 @@ alias is set and the canonical flag is not, the alias value takes precedence.
 
 Token replenishment rate for the per-`(srcIP, groupIdx)` retransmit limiter
 (tokens per second). Applied **post-lookup** on cache hits only. When the bucket
-is exhausted the retransmit is suppressed but an ACK is still returned.
+is exhausted the retransmit is suppressed and the request is answered like the
+other honest-congestion tiers: THROTTLED with `-rl-throttle-response`, silence
+otherwise (never ACK — an ACK would cancel the listener gap with nothing sent).
 
 ### `-rl-group-burst` / `RL_GROUP_BURST` (default: `50`)
 
@@ -363,7 +365,7 @@ from the frame TxID using the same `shard.Engine` as the multicast egress path
 ### `-rl-throttle-response` / `RL_THROTTLE_RESPONSE` (default: `false`)
 
 When enabled, a rejection by the honest-congestion tiers (per-sequence,
-per-chain) returns a 16-byte THROTTLED response (`MsgType 0x13`) carrying a
+per-chain, per-group) returns a 16-byte THROTTLED response (`MsgType 0x13`) carrying a
 backoff-bucket hint instead of silently dropping the NACK. The listener holds
 the gap for the hinted backoff (`125 ms << bucket`) and retries the **same**
 endpoint without escalating or consuming its retry budget. The per-IP flood tier

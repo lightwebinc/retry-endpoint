@@ -296,8 +296,8 @@ func (r *Recorder) ProxyQueueDropped() {
 	r.proxyQueueDropped.Add(context.Background(), 1)
 }
 
-// ResponseSent records an ACK or MISS datagram successfully written to the
-// NACK socket. typ must be "ack" or "miss".
+// ResponseSent records an ACK, MISS, or THROTTLED datagram successfully
+// written to the NACK socket. typ must be "ack", "miss", or "throttled".
 func (r *Recorder) ResponseSent(typ string) {
 	r.responsesSent.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("type", typ),

@@ -314,7 +314,7 @@ func TestProcessNACK_NilSrc_RetransmitsNoResponse(t *testing.T) {
 	}
 }
 
-func TestProcessNACK_GroupLimit_SkipsRetransmit_StillACKs(t *testing.T) {
+func TestProcessNACK_GroupLimit_ThrottleRespOff_SkipsRetransmit_Silent(t *testing.T) {
 	mc := newMockCache()
 	rt := &mockRetransmitter{}
 	conn := &mockPacketConn{}
@@ -352,13 +352,71 @@ func TestProcessNACK_GroupLimit_SkipsRetransmit_StillACKs(t *testing.T) {
 	rt.called = false
 
 	// Second request: group limiter exhausted — retransmit must be skipped
-	// but ACK must still be sent (frame exists).
+	// and, with the throttle response off, no response sent. Never ACK: an
+	// ACK would cancel the listener gap with nothing retransmitted.
 	s.processNACK(conn, 0, buildNACK(msgTypeNACK, 0, seqNum, seqNum), src)
 	if rt.called {
 		t.Error("second request: retransmitter must NOT be called when group throttled")
 	}
-	if len(conn.written) != 2 || conn.written[1][6] != msgTypeACK {
-		t.Fatalf("second request: expected ACK even when group throttled, got %d responses", len(conn.written)-1)
+	if len(conn.written) != 1 {
+		t.Fatalf("second request: group throttle must be silent with throttleResp off, got %d extra response(s)", len(conn.written)-1)
+	}
+}
+
+// ── ACK Flags honesty ─────────────────────────────────────────────────────────
+
+// ackFlagsAfterHit runs a cache-hit NACK through a server with the given
+// retransmit modes and returns the ACK Flags byte.
+func ackFlagsAfterHit(t *testing.T, multicast, unicast bool, rt *mockRetransmitter) byte {
+	t.Helper()
+	mc := newMockCache()
+	conn := &mockPacketConn{}
+
+	const seqNum uint64 = 0xCAFE0010
+	storeFrame(mc, 0, seqNum, buildCacheFrame(t, seqNum))
+
+	s := New(9300, mc, permissiveRL(), nil, rt, 1, false)
+	s.SetRetransmitModes(multicast, unicast)
+	src := &net.UDPAddr{IP: net.IPv6loopback, Port: 12345}
+	s.processNACK(conn, 0, buildNACK(msgTypeNACK, 0, seqNum, seqNum), src)
+
+	if len(conn.written) != 1 {
+		t.Fatalf("expected 1 ACK response, got %d", len(conn.written))
+	}
+	if conn.written[0][6] != msgTypeACK {
+		t.Fatalf("response type = 0x%02X, want ACK (0x%02X)", conn.written[0][6], msgTypeACK)
+	}
+	return conn.written[0][7]
+}
+
+func TestProcessNACK_ACKFlags_MulticastOnly(t *testing.T) {
+	rt := &mockRetransmitter{}
+	if flags := ackFlagsAfterHit(t, true, false, rt); flags != ackFlagMulticastSent {
+		t.Errorf("ACK Flags = 0x%02X, want 0x%02X (multicast only)", flags, ackFlagMulticastSent)
+	}
+	if !rt.called || rt.unicastCalled {
+		t.Errorf("dispatch = (mc=%v, uc=%v), want (true, false)", rt.called, rt.unicastCalled)
+	}
+}
+
+func TestProcessNACK_ACKFlags_UnicastOnly(t *testing.T) {
+	rt := &mockRetransmitter{}
+	if flags := ackFlagsAfterHit(t, false, true, rt); flags != ackFlagUnicastSent {
+		t.Errorf("ACK Flags = 0x%02X, want 0x%02X (unicast only)", flags, ackFlagUnicastSent)
+	}
+	if rt.called || !rt.unicastCalled {
+		t.Errorf("dispatch = (mc=%v, uc=%v), want (false, true)", rt.called, rt.unicastCalled)
+	}
+}
+
+func TestProcessNACK_ACKFlags_Both(t *testing.T) {
+	rt := &mockRetransmitter{}
+	want := ackFlagMulticastSent | ackFlagUnicastSent
+	if flags := ackFlagsAfterHit(t, true, true, rt); flags != want {
+		t.Errorf("ACK Flags = 0x%02X, want 0x%02X (multicast + unicast)", flags, want)
+	}
+	if !rt.called || !rt.unicastCalled {
+		t.Errorf("dispatch = (mc=%v, uc=%v), want (true, true)", rt.called, rt.unicastCalled)
 	}
 }
 

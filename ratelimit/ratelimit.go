@@ -113,7 +113,8 @@ func (r *Limiter) AllowChain(srcIP net.IP, hashKey uint64) bool {
 
 // AllowGroup checks the group tier (post-lookup, before Retransmit).
 // groupIdx is derived from the frame's TxID. Returns true if the retransmit
-// should proceed; false means throttle the retransmit (but still send ACK).
+// should proceed; false means throttle the retransmit (answered with
+// THROTTLED when the throttle response is enabled, silence otherwise).
 func (r *Limiter) AllowGroup(srcIP net.IP, groupIdx uint32) bool {
 	key := fmt.Sprintf("%s:%d", srcIP.String(), groupIdx)
 	return r.groupLimiter.Allow(key)

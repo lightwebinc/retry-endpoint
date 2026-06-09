@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/lightwebinc/retry-endpoint/ratelimit"
+	"github.com/lightwebinc/shard-common/shard"
 )
 
 // TestProcessNACK_ThrottleResponse_SequenceTier verifies that, with the throttle
@@ -78,6 +79,48 @@ func TestProcessNACK_ThrottleResponse_ChainTier(t *testing.T) {
 	}
 	if got := conn.written[0][7] & 0x0F; got != throttleBucketChain {
 		t.Errorf("bucket = %d, want %d (chain)", got, throttleBucketChain)
+	}
+}
+
+// TestProcessNACK_ThrottleResponse_GroupTier verifies the post-lookup group
+// tier returns a THROTTLED hint (group bucket) rather than ACK — a fake ACK
+// would cancel the listener gap with no retransmit dispatched (silent loss).
+func TestProcessNACK_ThrottleResponse_GroupTier(t *testing.T) {
+	mc := newMockCache()
+	rt := &mockRetransmitter{}
+	conn := &mockPacketConn{}
+
+	const seqNum uint64 = 0xABCD0004
+	storeFrame(mc, 0, seqNum, buildCacheFrame(t, seqNum))
+
+	// Group limiter allows 1; IP/chain/sequence wide open.
+	rl := ratelimit.New(ratelimit.Config{
+		IPRate: 1e9, IPBurst: 1_000_000,
+		ChainRate: 1e9, ChainWindow: time.Second,
+		SequenceMax: 1_000_000, SequenceWindow: time.Minute,
+		GroupRate: 1, GroupBurst: 1,
+	})
+	s := New(9300, mc, rl, nil, rt, 1, false)
+	s.SetShardEngine(shard.New(0xFF05, shard.DefaultGroupID, 2))
+	s.SetThrottleResponse(true)
+	src := &net.UDPAddr{IP: net.IPv6loopback, Port: 12345}
+
+	s.processNACK(conn, 0, buildNACK(msgTypeNACK, 0, seqNum, seqNum), src) // 1st: served
+	conn.written = nil
+	rt.called = false
+	s.processNACK(conn, 0, buildNACK(msgTypeNACK, 0, seqNum, seqNum), src) // 2nd: group-throttled
+
+	if rt.called {
+		t.Error("retransmitter must NOT be called when group throttled")
+	}
+	if len(conn.written) != 1 {
+		t.Fatalf("expected 1 THROTTLED response, got %d", len(conn.written))
+	}
+	if got := conn.written[0][6]; got != msgTypeThrottled {
+		t.Fatalf("response type = 0x%02X, want THROTTLED (0x%02X), never ACK", got, msgTypeThrottled)
+	}
+	if got := conn.written[0][7] & 0x0F; got != throttleBucketGroup {
+		t.Errorf("bucket = %d, want %d (group)", got, throttleBucketGroup)
 	}
 }
 

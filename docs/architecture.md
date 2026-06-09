@@ -33,16 +33,19 @@ shard-listener              retry-endpoint
               │                        │ rate-limit tiers (IP / seq / chain / group)
               │                        │ lookup cache
               │                        ├─ HIT      → retransmit (multicast and/or unicast) + ACK
+              │                        │            (ACK Flags reflect what was dispatched)
               │                        ├─ MISS     → MISS response → escalate
-              │                        └─ THROTTLED → seq/chain throttle (opt-in
+              │                        └─ THROTTLED → seq/chain/group throttle (opt-in
               │                                       -rl-throttle-response) → listener holds, no escalate
               ◀── ACK/MISS/THROTTLED ──┘
 ```
 
-The seq/chain rate-limit tiers reject honest congestion; with
+The seq/chain/group rate-limit tiers reject honest congestion; with
 `-rl-throttle-response` they answer with a 16-byte THROTTLED hint so the listener
-holds the gap and retries the same endpoint instead of escalating. The per-IP
-flood tier never answers (reflection guard). See [Rate Limiting](configuration.md#rate-limiting).
+holds the gap and retries the same endpoint instead of escalating (without the
+flag they stay silent and the listener falls back to timeout + backoff). The
+per-IP flood tier never answers (reflection guard). See
+[Rate Limiting](configuration.md#rate-limiting).
 
 ## Cascaded / downstream-domain retransmission
 
@@ -255,11 +258,13 @@ uniquely identify every frame within a flow. No secondary index is needed.
 
 1. Reads one 64-byte NACK datagram (BRC-126 wire format).
 2. Applies four-tier rate limiting (per-IP, per-HashKey, per-SeqNum pre-lookup;
-   per-group post-lookup). Pre-lookup drops are silent. The group tier skips
-   the retransmit but still sends ACK so the listener does not escalate.
+   per-group post-lookup). Throttled requests are answered with THROTTLED when
+   `-rl-throttle-response` is set (sequence/chain/group tiers; the IP flood
+   tier never answers) and dropped silently otherwise.
 3. Looks up the frame in the cache by `HashKey ∥ StartSeq` (16-byte key).
 4. On **hit**: dispatches `retransmit.Send`, then sends a 16-byte ACK (unless
-   `-suppress-ack`).
+   `-suppress-ack`) whose Flags record what was dispatched (`0x01` multicast,
+   `0x02` unicast).
 5. On **miss**: sends a 16-byte MISS (unless `-suppress-miss`). The listener
    escalates to the next endpoint immediately.
 
@@ -373,9 +378,12 @@ kernel may route `FF05::` via the management interface (lower-metric default rou
 
 ## Rate limiting
 
-Four tiers applied in order. Pre-lookup tiers drop silently (no response sent).
-The post-lookup group tier skips the retransmit but still sends ACK — the
-listener must not escalate when the frame is available.
+Four tiers applied in order. A throttled request is dropped silently unless
+`-rl-throttle-response` is set, in which case the honest-congestion tiers
+(2–4) answer with a THROTTLED hint so the listener holds instead of
+escalating; the per-IP flood tier (1) always stays silent. The group tier
+never sends ACK on throttle — an ACK would cancel the listener gap with no
+retransmit dispatched.
 
 | #   | Level                 | Algorithm      | Position    | Config flags                              |
 | --- | --------------------- | -------------- | ----------- | ----------------------------------------- |

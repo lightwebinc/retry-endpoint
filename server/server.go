@@ -38,10 +38,20 @@ const (
 // ThrottleHintBase << bucket (see BRC-126). Sequence-level throttling implies a
 // retransmit for this exact gap was just served (and is propagating via
 // multicast), so the hold is short; chain-level throttling means the source is
-// NACKing a whole flow too hard, so it backs off a little longer.
+// NACKing a whole flow too hard, so it backs off a little longer; group-level
+// throttling means the retransmit budget for a whole shard group is exhausted
+// (the broadest scope), so it backs off longest.
 const (
 	throttleBucketSequence byte = 2 // ~500ms at the 125ms base
 	throttleBucketChain    byte = 3 // ~1s
+	throttleBucketGroup    byte = 4 // ~2s
+)
+
+// ACK response Flags bits (mirrored in shard-listener/nack/wire.go). Each bit
+// is set only when the corresponding retransmit path actually dispatched.
+const (
+	ackFlagMulticastSent byte = 0x01
+	ackFlagUnicastSent   byte = 0x02
 )
 
 // Server receives NACK requests and coordinates retransmissions.
@@ -118,8 +128,8 @@ func (s *Server) SetSuppressACK(v bool) { s.suppressACK = v }
 func (s *Server) SetSuppressMISS(v bool) { s.suppressMISS = v }
 
 // SetThrottleResponse enables THROTTLED replies on honest-congestion throttles
-// (sequence and chain tiers). The IP flood tier stays silent regardless, so a
-// spoofed-source flood is never answered. Off by default.
+// (sequence, chain, and group tiers). The IP flood tier stays silent
+// regardless, so a spoofed-source flood is never answered. Off by default.
 func (s *Server) SetThrottleResponse(v bool) { s.throttleResp = v }
 
 // SetBindAddr sets the specific IPv6 address the NACK socket binds to.
@@ -336,47 +346,53 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		copy(txID[:], raw[8:40])
 	}
 
-	// Rate limiting: tier 4 (group), post-lookup.
-	// On throttle: skip retransmit but still send ACK (frame exists; listener
-	// must not escalate to the next endpoint on an honest ACK).
-	groupThrottled := false
+	// Rate limiting: tier 4 (group), post-lookup. Like the other honest-
+	// congestion tiers: THROTTLED (group bucket) when enabled, silence
+	// otherwise — never ACK, which would cancel the listener gap with no
+	// retransmit dispatched (silent loss).
 	if s.shardEngine != nil {
 		groupIdx := s.shardEngine.GroupIndex(&txID)
 		if !s.rateLimiter.AllowGroup(srcIP, groupIdx) {
-			groupThrottled = true
 			if s.rec != nil {
 				s.rec.RateLimitDrop(string(ratelimit.LevelGroup))
 			}
 			if s.debug {
 				s.log.Debug("rate limited", "level", ratelimit.LevelGroup, "group_idx", groupIdx)
 			}
+			if s.throttleResp && src != nil {
+				s.sendThrottled(conn, src, throttleBucketGroup, seqNum)
+			}
+			return
 		}
 	}
 
-	if !groupThrottled {
-		if s.retransmitMC {
-			if err := s.retransmit.Retransmit(raw, txID); err != nil {
-				s.log.Error("retransmit error", "err", err)
-				return
-			}
-			if s.rec != nil {
-				s.rec.Retransmit()
-			}
+	var ackFlags byte
+	if s.retransmitMC {
+		if err := s.retransmit.Retransmit(raw, txID); err != nil {
+			s.log.Error("retransmit error", "err", err)
+			return
 		}
-		// Unicast the frame back to the requester when unicast mode is on, or
-		// always for a proxied NACK — a cross-domain proxy receives the frame
-		// only via this return channel (it is not joined to our shard groups).
-		if (s.retransmitUC || proxied) && src != nil {
-			if err := s.retransmit.RetransmitUnicast(raw, src); err != nil {
-				s.log.Error("unicast retransmit error", "err", err)
-			} else if s.rec != nil {
+		ackFlags |= ackFlagMulticastSent
+		if s.rec != nil {
+			s.rec.Retransmit()
+		}
+	}
+	// Unicast the frame back to the requester when unicast mode is on, or
+	// always for a proxied NACK — a cross-domain proxy receives the frame
+	// only via this return channel (it is not joined to our shard groups).
+	if (s.retransmitUC || proxied) && src != nil {
+		if err := s.retransmit.RetransmitUnicast(raw, src); err != nil {
+			s.log.Error("unicast retransmit error", "err", err)
+		} else {
+			ackFlags |= ackFlagUnicastSent
+			if s.rec != nil {
 				s.rec.UnicastRetransmit()
 			}
 		}
 	}
 
 	if !s.suppressACK && src != nil {
-		s.sendResponse(conn, src, msgTypeACK, 0x01, seqNum)
+		s.sendResponse(conn, src, msgTypeACK, ackFlags, seqNum)
 	}
 
 	if s.debug {
