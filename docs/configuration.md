@@ -37,7 +37,7 @@ Default `0x000B` corresponds to the IANA-assigned Bitcoin allocation
 
 ## SSM (RFC 4607)
 
-See the [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/SourceSpecificMulticast/ssm-support-plan.md).
+See the [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm).
 The retry-endpoint plays two roles under SSM: it **emits** NACK-discovery
 beacons (so listeners need to know `bindSource` to pre-declare it in
 their `ssm-bootstrap-beacon`), and it **consumes** the data plane
@@ -359,6 +359,17 @@ is exhausted the retransmit is suppressed but an ACK is still returned.
 Burst size for the per-`(srcIP, groupIdx)` token bucket. `groupIdx` is derived
 from the frame TxID using the same `shard.Engine` as the multicast egress path
 (`-shard-bits` must match).
+
+### `-rl-throttle-response` / `RL_THROTTLE_RESPONSE` (default: `false`)
+
+When enabled, a rejection by the honest-congestion tiers (per-sequence,
+per-chain) returns a 16-byte THROTTLED response (`MsgType 0x13`) carrying a
+backoff-bucket hint instead of silently dropping the NACK. The listener holds
+the gap for the hinted backoff (`125 ms << bucket`) and retries the **same**
+endpoint without escalating or consuming its retry budget. The per-IP flood tier
+**never** answers (it sheds spoofed-source load and a reply would permit
+reflection). Optional load-shedding refinement for high-fan-out deployments; see
+[BRC-126 — Retransmission Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md).
 
 ---
 

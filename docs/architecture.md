@@ -30,11 +30,19 @@ shard-proxy  ──UDP multicast──▶ FF05::<shard>:9001
               ▼                               ▼
 shard-listener              retry-endpoint
 (gap detected → NACK)  ──UDP──▶  [nack-addr]:9300
+              │                        │ rate-limit tiers (IP / seq / chain / group)
               │                        │ lookup cache
-              │                        ├─ HIT  → retransmit (multicast and/or unicast) + ACK
-              │                        └─ MISS → MISS response → escalate
-              ◀── ACK/MISS ────────────┘
+              │                        ├─ HIT      → retransmit (multicast and/or unicast) + ACK
+              │                        ├─ MISS     → MISS response → escalate
+              │                        └─ THROTTLED → seq/chain throttle (opt-in
+              │                                       -rl-throttle-response) → listener holds, no escalate
+              ◀── ACK/MISS/THROTTLED ──┘
 ```
+
+The seq/chain rate-limit tiers reject honest congestion; with
+`-rl-throttle-response` they answer with a 16-byte THROTTLED hint so the listener
+holds the gap and retries the same endpoint instead of escalating. The per-IP
+flood tier never answers (reflection guard). See [Rate Limiting](configuration.md#rate-limiting).
 
 ## Cascaded / downstream-domain retransmission
 
@@ -195,7 +203,7 @@ emitter and an SSM consumer:
 - **Addressing** uses `FF35::B:idx` (site SSM) or `FF3E::B:idx`
   (global SSM); ASM at global scope is rejected per RFC 8815.
 
-See the [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/SourceSpecificMulticast/ssm-support-plan.md)
+See the [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm)
 for fabric prerequisites (PIM-SSM, MLDv2, raised `mld_max_msf`).
 
 ## Ingress (multicast receive)
@@ -223,12 +231,14 @@ UDP only.)
 
 ## Cache
 
-Two backends are supported:
+The frame store is the modular [`shard-common/cache`](https://github.com/lightwebinc/shard-common/blob/main/docs/cache-backend.md)
+backend, selected via `-cache-backend`. Three backends are supported:
 
-| Backend  | Storage                                    | Dedup                 | Notes                                         |
-| -------- | ------------------------------------------ | --------------------- | --------------------------------------------- |
-| `memory` | In-process freecache (60 s TTL by default) | None                  | Single-node; cache lost on restart            |
-| `redis`  | External Redis (`bre:frame:<key>`)         | Cross-instance SET NX | Shared across all endpoints; survives restart |
+| Backend     | Storage                                              | Dedup                  | Notes                                         |
+| ----------- | ---------------------------------------------------- | ---------------------- | --------------------------------------------- |
+| `memory`    | In-process striped map (64 shards, 60 s TTL default) | None                   | Single-node; cache lost on restart            |
+| `redis`     | Any Redis-protocol server (`bre:frame:<key>`)        | Cross-instance `SET NX`| Shared across all endpoints; survives restart |
+| `aerospike` | Aerospike (`CREATE_ONLY` write)                      | Cross-instance         | Largest fleets; auto-sharded hybrid RAM/SSD   |
 
 Cache keys use a single 16-byte key:
 
@@ -408,7 +418,7 @@ retry-endpoint/
   main.go          entry point; wires config → cache → ingress → server → beacon
   config/          runtime configuration (flags + env vars + validation)
   ingress/         single-worker multicast receive loop; writes to cache
-  cache/           Cache interface + memory (freecache) and redis backends
+  cache/           Store adapter over the shard-common cache.Backend (memory / redis / aerospike)
   server/          UDP NACK receive pool; rate-limit → cache lookup → retransmit
   retransmit/      multicast + unicast retransmit egress; cross-instance dedup
   proxy/           cross-domain NACK proxying: recover misses from upstream, re-cache

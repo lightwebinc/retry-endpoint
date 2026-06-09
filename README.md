@@ -36,8 +36,7 @@ shard-proxy ──multicast──▶ FF05::<shard>:9001
 
 ## Dependencies
 
-- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common) — `frame`, `shard`, `seqhash` packages
-- [`github.com/coocood/freecache`](https://github.com/coocood/freecache) — GC-free in-memory cache
+- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common) — `frame`, `shard`, `seqhash`, and the modular `cache` backend (memory / redis / aerospike)
 - Prometheus client + OpenTelemetry SDK
 
 ## Requirements
