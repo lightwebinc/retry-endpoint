@@ -7,9 +7,7 @@ fabric. It joins all shard groups plus `GroupBlockBroadcast` (BRC-131 / BRC-134)
 `GroupSubtreeDataAnnounce` (BRC-132), caches every frame it receives, and serves
 unicast NACK requests from listeners that detect sequence gaps.
 
-Foundational concepts (shard hierarchy, frame versions, NACK semantics) live in
-[multicast-skills/architecture.md](../../../multicast-skills/architecture.md) and
-[multicast-skills/protocol.md](../../../multicast-skills/protocol.md); BRC wire formats in
+BRC wire formats live in
 [bsv-multicast/docs/](../../../bsv-multicast/docs/). On a cache hit it
 retransmits the frame via multicast egress and/or directly to the requesting listener
 via unicast, then sends an ACK response. On a miss it sends a MISS response so the
