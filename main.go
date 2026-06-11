@@ -49,8 +49,36 @@ import (
 //	data-plane shard groups        → SSMPublishersStatic (lab) or manifest
 //	                                  union (production — wired by the
 //	                                  manifest consumer in a later iteration)
+// excludeOwnSource drops the node's own source address from a roster before
+// it feeds (S,G) joins. A node must never join its own source on the PIM
+// interface: the MLD state installs an iif==oif mroute on a collapsed edge
+// and every originated frame re-enters the MFC until hop-limit death —
+// measured ~60x egress amplification (see
+// 1bsv-ops/environments/lab-spine-ssm-geo/LATENCY-GEO.md). Consequence: this
+// process does not receive own-node frames via multicast; a local mirror is
+// required where own-source completeness matters.
+func excludeOwnSource(srcs []netip.Addr, own netip.Addr) []netip.Addr {
+	if !own.IsValid() {
+		return srcs
+	}
+	out := srcs[:0]
+	for _, s := range srcs {
+		if s != own {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.GroupSources, error) {
 	gs := make(ingress.GroupSources)
+
+	var own netip.Addr
+	if cfg.BindSource != "" {
+		if a, err := netip.ParseAddr(cfg.BindSource); err == nil {
+			own = a
+		}
+	}
 
 	resolve := func(entries []string, target ingress.GroupSources, groupIPs ...net.IP) error {
 		if len(entries) == 0 {
@@ -68,7 +96,7 @@ func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.Grou
 			if !ok {
 				return fmt.Errorf("group %s: not IPv6", gip)
 			}
-			target[ga] = r.Current()
+			target[ga] = excludeOwnSource(r.Current(), own)
 		}
 		return nil
 	}
@@ -100,7 +128,7 @@ func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.Grou
 		if err := r.Start(ctx); err != nil {
 			return nil, fmt.Errorf("publishers-static: %w", err)
 		}
-		srcs := r.Current()
+		srcs := excludeOwnSource(r.Current(), own)
 		// Apply to every shard group address derived from MCPrefix/MCGroupID.
 		// The shard.Engine.Addr helper isn't visible here (no engine in
 		// main scope at this point), but iterating numGroups by index is
