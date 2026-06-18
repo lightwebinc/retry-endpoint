@@ -49,6 +49,7 @@ import (
 //	data-plane shard groups        → SSMPublishersStatic (lab) or manifest
 //	                                  union (production — wired by the
 //	                                  manifest consumer in a later iteration)
+//
 // excludeOwnSource drops the node's own source address from a roster before
 // it feeds (S,G) joins. A node must never join its own source on the PIM
 // interface: the MLD state installs an iif==oif mroute on a collapsed edge
@@ -361,6 +362,7 @@ func run() error {
 	// Build retransmitter.
 	retrans := retransmit.New(engine, egressIfaces, cfg.EgressPort, cfg.DedupWindow, dedup, rec, cfg.Debug)
 	retrans.SetUnicastSource(nackBindIP)
+	retrans.SetMulticastLoop(cfg.EgressMulticastLoop)
 	if err := retrans.Open(); err != nil {
 		return err
 	}

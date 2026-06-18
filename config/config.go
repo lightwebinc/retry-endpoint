@@ -111,9 +111,10 @@ type Config struct {
 	NACKWorkers int // Worker goroutines for NACK processing
 
 	// Retransmit
-	EgressIfaces []string      // NIC names for multicast egress
-	EgressPort   int           // Destination UDP port for retransmitted frames
-	DedupWindow  time.Duration // Deduplication window (default 60s)
+	EgressIfaces        []string      // NIC names for multicast egress
+	EgressPort          int           // Destination UDP port for retransmitted frames
+	DedupWindow         time.Duration // Deduplication window (default 60s)
+	EgressMulticastLoop bool          // IPV6_MULTICAST_LOOP on the retransmit socket; REQUIRED on a collapsed/mesh router node where egress rides a dummy mc-local iface — the kernel only submits locally-originated multicast to the MFC (for forwarding onto tunnels) when loop is on. Mirrors shard-proxy EGRESS_MULTICAST_LOOP. Default off.
 
 	// NACK proxying (cross-domain recovery). When enabled, a cache miss
 	// triggers an asynchronous recovery from an upstream retry-endpoint.
@@ -283,6 +284,8 @@ func Load() (*Config, error) {
 
 	flag.BoolVar(&c.SubtreeDataEnabled, "subtree-data-enabled", envBool("SUBTREE_DATA_ENABLED", false),
 		"enable BRC-132 subtree data caching: join GroupSubtreeDataAnnounce (0xFFFB) group")
+	flag.BoolVar(&c.EgressMulticastLoop, "egress-multicast-loop", envBool("EGRESS_MULTICAST_LOOP", false),
+		"IPV6_MULTICAST_LOOP on the retransmit socket (collapsed/mesh node: lets locally-originated retransmits reach the MFC for fan-out onto tunnels)")
 	flag.BoolVar(&c.Debug, "debug", envBool("DEBUG", false),
 		"enable per-packet debug logging; deprecated alias for -log-level=debug")
 	flag.StringVar(&c.LogFormat, "log-format", envStr("LOG_FORMAT", "text"),

@@ -28,8 +28,9 @@ type Retransmitter struct {
 	debug       bool
 	log         *slog.Logger
 
-	unicastSrc  net.IP       // optional source IP for the unicast retransmit socket
-	unicastConn *net.UDPConn // opened in Open(); used by RetransmitUnicast
+	unicastSrc    net.IP       // optional source IP for the unicast retransmit socket
+	unicastConn   *net.UDPConn // opened in Open(); used by RetransmitUnicast
+	multicastLoop bool         // IPV6_MULTICAST_LOOP on egress sockets (collapsed/mesh node)
 
 	mu      sync.Mutex
 	sockets map[string]*net.UDPConn // iface name -> socket
@@ -62,6 +63,12 @@ func New(
 // Set it to the advertised NACK address so the frame returned to a requester
 // is sourced from the address its registry expects. Must be called before Open.
 func (r *Retransmitter) SetUnicastSource(ip net.IP) { r.unicastSrc = ip }
+
+// SetMulticastLoop enables IPV6_MULTICAST_LOOP on the egress socket(s). Required on a
+// collapsed/mesh router node whose egress iface is a dummy (mc-local): the kernel only
+// submits locally-originated multicast to the MFC for forwarding onto the fabric
+// tunnels when loop is on (mirrors shard-proxy EGRESS_MULTICAST_LOOP). Call before Open.
+func (r *Retransmitter) SetMulticastLoop(b bool) { r.multicastLoop = b }
 
 // Open opens egress sockets for all interfaces plus the unicast retransmit socket.
 func (r *Retransmitter) Open() error {
@@ -224,6 +231,14 @@ func (r *Retransmitter) openEgressSocket(iface *net.Interface) (*net.UDPConn, er
 	if err := unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_MULTICAST_IF, iface.Index); err != nil {
 		_ = udpConn.Close()
 		return nil, fmt.Errorf("set multicast interface: %w", err)
+	}
+	if r.multicastLoop {
+		// Collapsed/mesh node: locally-originated multicast on a dummy egress iface is
+		// only handed to the MFC (for forwarding onto the fabric tunnels) when loop is on.
+		if err := unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_MULTICAST_LOOP, 1); err != nil {
+			_ = udpConn.Close()
+			return nil, fmt.Errorf("set multicast loop: %w", err)
+		}
 	}
 
 	return udpConn, nil
