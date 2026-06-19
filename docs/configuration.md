@@ -55,6 +55,12 @@ IPv6 literal bound on the beacon emit socket via `net.DialUDP(laddr=...)`.
 SSM listeners list this address in their `-ssm-bootstrap-beacon`.
 Each retry-endpoint replica MUST use a distinct `bindSource`.
 
+It also marks this endpoint's **own** source: that source is excluded from the
+cache's `(S,G)` join roster (`excludeOwnSource`) to avoid an endpoint joining its
+own feed. **Leave empty to cache the full roster including own** — required where
+the endpoint must repair its own source (e.g. the collapsed PIM-SSM fabric, where
+the source node's cache is the last-resort repairer for that source's frames).
+
 ### `-ssm-bootstrap-manifest` / `SSM_BOOTSTRAP_MANIFEST` (default: `""`)
 
 CSV of shard-manifest source IPs (literals or DNS names). Used for the
@@ -429,6 +435,16 @@ raw frame directly back to the requesting listener via the source address of the
 incoming NACK datagram. This guarantees delivery to the specific listener without
 relying on multicast fabric propagation. Can be enabled alongside multicast
 retransmit — both fire for the same NACK when both flags are set.
+
+**Collapsed PIM-SSM fabric** (e.g. the lab-geo3-collapsed nodes): set
+`BEACON_FLAGS_UNICAST=true` **and** `BEACON_FLAGS_MULTICAST=false`. Multicast
+re-injection cannot repair a *remote* receiver there — PIM-SSM RPF lets only the
+source node inject into its own `(S,G)` tree — so unicast is the only working
+return channel. Pair this with **no `-bind-source`** so the cache holds its own
+source too (the origin becomes the last-resort repairer), and the listener must
+bind its NACK socket to a routable `/128` (`shard-listener-1bsv -nack-source`) or
+the unicast reply is misrouted off the tunnel. See
+`1bsv-ops/docs/lab-geo3-collapsed-delivery-proof.md` §6.
 
 ### `-beacon-flags-draining` / `BEACON_FLAGS_DRAINING` (default: `false`)
 
