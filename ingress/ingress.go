@@ -381,9 +381,15 @@ func (w *Worker) openRawSocket() (int, error) {
 	if err != nil {
 		return -1, fmt.Errorf("socket: %w", err)
 	}
-	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
+	// The ingress is single-worker, so it does NOT need SO_REUSEPORT (which would only matter
+	// for same-EUID load-balancing). It uses SO_REUSEADDR alone: that is the cross-EUID
+	// bind path, so this socket can co-exist with a co-resident shard-listener (a DIFFERENT
+	// user, which keeps SO_REUSEPORT for its own workers) on a collapsed node — both receive
+	// the multicast group. NB: declaring SO_REUSEPORT here would force the same-EUID check and
+	// defeat the SO_REUSEADDR cross-user share.
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
 		_ = unix.Close(fd)
-		return -1, fmt.Errorf("SO_REUSEPORT: %w", err)
+		return -1, fmt.Errorf("SO_REUSEADDR: %w", err)
 	}
 	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, socketRecvBuf)
 	sa := &unix.SockaddrInet6{Port: w.port}

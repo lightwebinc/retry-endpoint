@@ -8,7 +8,10 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/lightwebinc/shard-common/frame"
 	"github.com/lightwebinc/shard-common/shard"
@@ -148,7 +151,18 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.bindAddr != "" {
 		host = s.bindAddr
 	}
-	conn, err := net.ListenPacket("udp6", fmt.Sprintf("[%s]:%d", host, s.port))
+	// SO_REUSEADDR so the NACK port can be shared with a co-resident shard-listener's beacon
+	// on the same port (collapsed node, different EUID) — same rationale as the ingress socket.
+	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
+		var cerr error
+		if err := c.Control(func(fd uintptr) {
+			cerr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+		}); err != nil {
+			return err
+		}
+		return cerr
+	}}
+	conn, err := lc.ListenPacket(ctx, "udp6", fmt.Sprintf("[%s]:%d", host, s.port))
 	if err != nil {
 		return fmt.Errorf("server: listen: %w", err)
 	}
