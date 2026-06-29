@@ -30,6 +30,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/lightwebinc/shard-common/bundle"
 	"github.com/lightwebinc/shard-common/frame"
 	"github.com/lightwebinc/shard-common/netjoin"
 
@@ -192,6 +193,14 @@ func (w *Worker) processFrame(raw []byte) {
 		return
 	}
 
+	// BRC-142 bundle frames (FrameVer 0x08) are handled separately because
+	// frame.Decode rejects V8 with ErrBadVer. A bundle is cached opaquely by
+	// its (HashKey, SeqNum) flow key, exactly like a BRC-124 frame.
+	if frame.IsBundle(raw) {
+		w.processBundleFrame(raw)
+		return
+	}
+
 	f, err := frame.Decode(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -232,6 +241,54 @@ func (w *Worker) processFrame(raw []byte) {
 			"txid", fmt.Sprintf("%x", f.TxID[:8]),
 			"hash_key", f.HashKey,
 			"seq_num", f.SeqNum,
+		)
+	}
+}
+
+// processBundleFrame handles BRC-142 bundle frames (FrameVer 0x08). A bundle is
+// cached opaquely by its (HashKey, SeqNum) flow key — identical to a BRC-124
+// frame — and retransmitted whole on NACK; the retry endpoint never parses
+// members.
+func (w *Worker) processBundleFrame(raw []byte) {
+	b, err := bundle.Decode(raw)
+	if err != nil {
+		if w.rec != nil {
+			w.rec.FrameDropped("decode_error")
+		}
+		if w.debug {
+			w.log.Debug("bundle decode error", "err", err, "len", len(raw))
+		}
+		return
+	}
+
+	if w.rec != nil {
+		w.rec.FrameReceived()
+	}
+
+	if b.SeqNum == 0 {
+		return // proxy has not stamped this bundle
+	}
+
+	var key [16]byte
+	binary.BigEndian.PutUint64(key[0:8], b.HashKey)
+	binary.BigEndian.PutUint64(key[8:16], b.SeqNum)
+	if err := w.cache.Store(key[:], raw, w.ttls.Tx); err != nil {
+		if w.rec != nil {
+			w.rec.CacheError()
+		}
+		w.log.Error("cache store error", "err", err)
+		return
+	}
+
+	if w.rec != nil {
+		w.rec.FrameCached()
+	}
+
+	if w.debug {
+		w.log.Debug("bundle cached",
+			"hash_key", b.HashKey,
+			"seq_num", b.SeqNum,
+			"members", len(b.Members),
 		)
 	}
 }

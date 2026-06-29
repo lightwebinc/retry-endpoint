@@ -366,6 +366,11 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 	// retransmit dispatched (silent loss).
 	if s.shardEngine != nil {
 		groupIdx := s.shardEngine.GroupIndex(&txID)
+		// A BRC-142 bundle has no single TxID; its group is in the header
+		// (offset 56), so derive the rate-limit group from there.
+		if frame.IsBundle(raw) && len(raw) >= 58 {
+			groupIdx = uint32(binary.BigEndian.Uint16(raw[56:58]))
+		}
 		if !s.rateLimiter.AllowGroup(srcIP, groupIdx) {
 			if s.rec != nil {
 				s.rec.RateLimitDrop(string(ratelimit.LevelGroup))

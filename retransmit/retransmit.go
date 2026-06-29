@@ -2,6 +2,7 @@
 package retransmit
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log/slog"
 	"net"
@@ -174,6 +175,16 @@ func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 		case frame.FrameVerV6:
 			ctrlIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupBlockBroadcast)
 			groupAddr = &net.UDPAddr{IP: ctrlIP, Port: r.egressPort}
+		case frame.FrameVerV8:
+			// BRC-142 bundle: the group is carried in the header (offset 56),
+			// not derived from a TxID (a bundle has none).
+			if len(raw) >= 58 {
+				groupIdx := uint32(binary.BigEndian.Uint16(raw[56:58]))
+				groupAddr = r.engine.Addr(groupIdx, r.egressPort)
+			} else {
+				groupIdx := r.engine.GroupIndex(&txID)
+				groupAddr = r.engine.Addr(groupIdx, r.egressPort)
+			}
 		default:
 			groupIdx := r.engine.GroupIndex(&txID)
 			groupAddr = r.engine.Addr(groupIdx, r.egressPort)
