@@ -3,6 +3,7 @@
 #
 # Binaries for programs and plugins
 retry-endpoint
+/ci/ci
 *.exe
 *.exe~
 *.dll
