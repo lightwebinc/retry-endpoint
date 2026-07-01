@@ -209,9 +209,12 @@ for fabric prerequisites (PIM-SSM, MLDv2, raised `mld_max_msf`).
 
 ## Ingress (multicast receive)
 
-A single goroutine opens a UDP socket with `SO_REUSEPORT` on the configured
+A single goroutine opens a UDP socket with `SO_REUSEADDR` on the configured
 listen port, joins all `NumGroups` shard groups, and writes each received frame to
-the cache with the configured TTL.
+the cache with the configured TTL. `SO_REUSEADDR` (not `SO_REUSEPORT`) is the
+cross-EUID co-bind path: it lets this socket co-exist with a co-resident
+shard-listener running under a **different** user on a collapsed node — both
+receive the same multicast group.
 
 In addition to the shard groups, the ingress worker always joins `GroupBlockBroadcast`
 (`FF0X::B:FFFE`) to cache BRC-131 block control frames and BRC-134 anchor transaction
@@ -224,11 +227,12 @@ lookup path as BRC-124/BRC-128 frames.
 See [bsv-multicast/docs/brc-134-anchor-transactions.md](../../../bsv-multicast/docs/brc-134-anchor-transactions.md)
 for the anchor frame wire format.
 
-**Why one worker:** Linux delivers multicast datagrams to **every** socket in a
-`SO_REUSEPORT` group — there is no load balancing for multicast. Running multiple
+**Why one worker:** Linux delivers multicast datagrams to **every** socket bound
+to the group — there is no load balancing for multicast. Running multiple
 workers would store each frame N times and drive N-fold cache churn. A single
-worker avoids this entirely. (`SO_REUSEPORT` load-balancing applies to unicast
-UDP only.)
+worker avoids this entirely. (Declaring `SO_REUSEPORT` would instead force a
+same-EUID check and defeat the `SO_REUSEADDR` cross-user share; its
+load-balancing applies to unicast UDP only.)
 
 ## Cache
 

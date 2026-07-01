@@ -470,7 +470,8 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Ingress is always single worker (SO_REUSEPORT multicast duplication).
+	// Ingress is always single worker (multicast is delivered to every bound
+	// socket, so multiple workers would duplicate each cached frame).
 	c.NumWorkers = 1
 
 	// Default NACK workers to NumCPU if set to zero.

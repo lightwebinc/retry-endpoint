@@ -3,10 +3,13 @@
 //
 // # Worker model
 //
-// Exactly one worker binds a UDP socket with SO_REUSEPORT on the configured
+// Exactly one worker binds a UDP socket with SO_REUSEADDR on the configured
 // port and joins all configured multicast groups on the configured interface.
-// This is critical: Linux delivers multicast to ALL sockets in a reuseport
-// group, so multiple workers would store each frame multiple times.
+// SO_REUSEADDR (not SO_REUSEPORT) is the cross-EUID co-bind path: it lets this
+// socket co-exist with a co-resident shard-listener under a DIFFERENT user on a
+// collapsed node — both receive the multicast group. Linux delivers multicast
+// to ALL such sockets, so a second retry-endpoint worker would store each frame
+// twice; hence exactly one worker.
 //
 // # Hot path per frame
 //
@@ -103,7 +106,7 @@ func (w *Worker) SetGroupSources(src GroupSources) {
 	w.sources = src
 }
 
-// Run opens a SO_REUSEPORT socket, joins all multicast groups, and processes
+// Run opens a SO_REUSEADDR socket, joins all multicast groups, and processes
 // frames until ctx is cancelled.
 func (w *Worker) Run(ctx context.Context) error {
 	fd, err := w.openRawSocket()
