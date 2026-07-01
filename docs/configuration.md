@@ -436,15 +436,14 @@ incoming NACK datagram. This guarantees delivery to the specific listener withou
 relying on multicast fabric propagation. Can be enabled alongside multicast
 retransmit — both fire for the same NACK when both flags are set.
 
-**Collapsed PIM-SSM fabric** (e.g. the lab-geo3-collapsed nodes): set
+**Collapsed PIM-SSM fabric** (e.g. a collapsed single-node fabric): set
 `BEACON_FLAGS_UNICAST=true` **and** `BEACON_FLAGS_MULTICAST=false`. Multicast
 re-injection cannot repair a *remote* receiver there — PIM-SSM RPF lets only the
 source node inject into its own `(S,G)` tree — so unicast is the only working
 return channel. Pair this with **no `-bind-source`** so the cache holds its own
-source too (the origin becomes the last-resort repairer), and the listener must
-bind its NACK socket to a routable `/128` (`shard-listener-1bsv -nack-source`) or
-the unicast reply is misrouted off the tunnel. See
-`1bsv-ops/docs/lab-geo3-collapsed-delivery-proof.md` §6.
+source too (the origin becomes the last-resort repairer), and the consumer
+listener must bind its NACK socket to a routable `/128` (the commercial variant
+exposes `-nack-source`) or the unicast reply is misrouted off the tunnel.
 
 ### `-beacon-flags-draining` / `BEACON_FLAGS_DRAINING` (default: `false`)
 

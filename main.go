@@ -54,10 +54,9 @@ import (
 // it feeds (S,G) joins. A node must never join its own source on the PIM
 // interface: the MLD state installs an iif==oif mroute on a collapsed edge
 // and every originated frame re-enters the MFC until hop-limit death —
-// measured ~60x egress amplification (see
-// 1bsv-ops/environments/lab-spine-ssm-geo/LATENCY-GEO.md). Consequence: this
-// process does not receive own-node frames via multicast; a local mirror is
-// required where own-source completeness matters.
+// measured ~60x egress amplification. Consequence: this process does not
+// receive own-node frames via multicast; a local mirror is required where
+// own-source completeness matters.
 func excludeOwnSource(srcs []netip.Addr, own netip.Addr) []netip.Addr {
 	if !own.IsValid() {
 		return srcs
