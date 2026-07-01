@@ -224,8 +224,23 @@ key is frame-version-agnostic: `HashKey (8B) ∥ SeqNum (8B)` → raw frame byte
 frame type, so BRC-131, BRC-132, and BRC-134 frames are served on NACK request with the same
 lookup path as BRC-124/BRC-128 frames.
 
-See [bsv-multicast/docs/brc-134-anchor-transactions.md](../../../bsv-multicast/docs/brc-134-anchor-transactions.md)
+See [bsv-multicast/docs/brc-134-anchor-transactions.md](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-134-anchor-transactions.md)
 for the anchor frame wire format.
+
+### BRC-142 bundle (FrameVer 0x08)
+
+A BRC-142 coalescing bundle (FrameVer `0x08`) packs several small transactions
+into one datagram. The retry-endpoint caches and retransmits bundles
+**opaquely**: `processBundleFrame` stores the whole datagram under the same
+`HashKey ∥ SeqNum` flow key as a BRC-124 frame (using the tx TTL, `-cache-ttl-tx`)
+and re-emits it verbatim on NACK. The **member count is never parsed** on the hot
+path — the bundle is a single opaque cache entry keyed by its flow, so recovery,
+dedup, and rate limiting all operate on the whole bundle, not its members.
+
+The one bundle-specific step is the retransmit group: a bundle has no single
+TxID, so its shard group index is read from the header at **offset 56:58**
+(`binary.BigEndian.Uint16(raw[56:58])`) rather than derived from a TxID. The
+same offset feeds the tier-4 group rate limiter for bundles.
 
 **Why one worker:** Linux delivers multicast datagrams to **every** socket bound
 to the group — there is no load balancing for multicast. Running multiple
@@ -325,6 +340,8 @@ interface (set via `-egress-iface`). On a cache hit it:
    - V4 (BRC-131): retransmits to `GroupBlockBroadcast` (`FF0X::B:FFFE`)
    - V5 (BRC-132): retransmits to `GroupSubtreeDataAnnounce` (`FF0X::B:FFFB`)
    - V6 (BRC-134 anchor): retransmits to `GroupBlockBroadcast` (`FF0X::B:FFFE`)
+   - V8 (BRC-142 bundle): reads the shard group index from the header at offset
+     56:58 (a bundle has no TxID); member count is never parsed
 2. Sends the raw frame bytes verbatim to the derived group address on each
    egress interface.
 
@@ -443,6 +460,7 @@ Protocol primitives are provided by
 ```
 shard-common/
   frame/    BRC-12/BRC-124/BRC-128/BRC-131/BRC-132/BRC-134 wire format: Decode, Encode, constants
+  bundle/   BRC-142 coalescing bundle (FrameVer 0x08): Decode, IsBundle, header offsets
   shard/    txid → group index → IPv6 multicast address derivation;
             control group constants and GroupAddr
   seqhash/  XXH64 flow hash for HashKey computation

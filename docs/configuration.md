@@ -183,6 +183,10 @@ listed default.
 | `-cache-ttl-block` / `CACHE_TTL_BLOCK` | `0x04` | BRC-131 block control | `10m` |
 | `-cache-ttl-subtree` / `CACHE_TTL_SUBTREE` | `0x05` | BRC-132 subtree data | `5m` |
 | `-cache-ttl-anchor` / `CACHE_TTL_ANCHOR` | `0x06` | BRC-134 anchor tx | `2m` |
+| _(uses `-cache-ttl-tx`)_ | `0x08` | BRC-142 coalescing bundle | `60s` |
+
+BRC-142 bundles (FrameVer `0x08`) have no dedicated TTL flag: they are cached
+opaquely on the tx hot path and reuse `-cache-ttl-tx` (`CACHE_TTL_TX`).
 
 Resolution order applied per frame type:
 
@@ -254,6 +258,15 @@ Multiple interfaces send the same retransmitted frame to each interface in order
 
 UDP destination port for retransmitted frames. Must match the listeners'
 `-listen-port`.
+
+### `-egress-multicast-loop` / `EGRESS_MULTICAST_LOOP` (default: `false`)
+
+Set `IPV6_MULTICAST_LOOP` on the retransmit egress socket(s). **Required on a
+collapsed / mesh router node** where retransmit egress rides a dummy `mc-local`
+interface: the kernel only submits locally-originated multicast to the multicast
+forwarding cache (MFC) — for fan-out onto the outbound tunnels — when loopback is
+enabled. Mirrors shard-proxy's `EGRESS_MULTICAST_LOOP`. Leave off on a normal
+node with a real fabric NIC.
 
 ### `-dedup-window` / `DEDUP_WINDOW` (default: `60s`)
 
