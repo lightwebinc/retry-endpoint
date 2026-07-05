@@ -320,7 +320,7 @@ func Load() (*Config, error) {
 	flag.DurationVar(&c.BeaconInterval, "beacon-interval", envDuration("BEACON_INTERVAL", 60*time.Second),
 		"beacon multicast interval")
 	flag.StringVar(&c.BeaconScope, "beacon-scope", envStr("BEACON_SCOPE", "site"),
-		"beacon scope: link | site | org | global | both | all")
+		"beacon scope: site | org | global | both | all")
 	flag.BoolVar(&c.BeaconFlagsUnicast, "beacon-flags-unicast", envBool("BEACON_FLAGS_UNICAST", false),
 		"advertise unicast retransmit support")
 	flag.BoolVar(&c.BeaconFlagsMulticast, "beacon-flags-multicast", envBool("BEACON_FLAGS_MULTICAST", true),
@@ -530,7 +530,7 @@ func Load() (*Config, error) {
 	case "both", "all":
 		c.BeaconScopeByte = 0xFF
 	default:
-		return nil, fmt.Errorf("beacon-scope must be one of link|site|org|global|both|all, got %q", c.BeaconScope)
+		return nil, fmt.Errorf("beacon-scope must be one of site|org|global|both|all, got %q", c.BeaconScope)
 	}
 	if c.BeaconTier > 255 {
 		return nil, fmt.Errorf("beacon-tier must fit in uint8, got %d", c.BeaconTier)

@@ -42,7 +42,7 @@ shard-proxy ──multicast──▶ FF05::<shard>:9001
 ## Requirements
 
 - Go 1.25 or later
-- Linux kernel 3.9+ (for `SO_REUSEADDR` cross-EUID co-bind)
+- Linux (any modern kernel; `SO_REUSEADDR` cross-EUID co-bind)
 - IPv6 enabled on the multicast fabric interface
 - Multicast routing configured for the same scope as proxy and listeners
 
@@ -68,7 +68,7 @@ go build -o retry-endpoint .
   -shard-bits 2 \
   -cache-backend redis \
   -redis-addr redis.local:6379 \
-  -nack-addr fd20::24
+  -nack-addr 2001:db8::24
 
 # SSM (RFC 4607) — Posture C. Requires PIM-SSM in the fabric and
 # raised net.ipv6.mld_max_msf. See bsv-multicast SSM Support Plan.
@@ -78,9 +78,9 @@ go build -o retry-endpoint .
   -shard-bits 2 \
   -scope site \
   -source-mode ssm \
-  -bind-source fd20::24 \
+  -bind-source 2001:db8::24 \
   -ssm-bootstrap-manifest shard-manifest-headless.svc.cluster.local \
-  -ssm-publishers-static  fd20::a01,fd20::a02   # lab only
+  -ssm-publishers-static  2001:db8::a01,2001:db8::a02   # lab only
 ```
 
 See [docs/configuration.md](docs/configuration.md) for all flags and environment variable equivalents.
@@ -93,7 +93,7 @@ to.
 
 If left empty the kernel binds the NACK socket to `[::]` and the default
 source-address selection rules may pick a SLAAC address (e.g.
-`fd20::216:3eff:fe4c:8a01`) for outgoing ACK responses. Listeners then either:
+`2001:db8::216:3eff:fe00:1`) for outgoing ACK responses. Listeners then either:
 
 - discard the ACK because they use a connected socket bound to the advertised
   address (the SLAAC source does not match), or
@@ -120,9 +120,9 @@ A Kubernetes Helm chart is published from a dedicated chart repository:
   ```
   helm repo add bre https://lightwebinc.github.io/retry-endpoint-helm
   helm install retry-node-1 bre/retry-endpoint \
-    --set config.nackAddr=fd20::24
+    --set config.nackAddr=2001:db8::24
   ```
-- OCI: `helm install retry-node-1 oci://ghcr.io/lightwebinc/charts/retry-endpoint --version 0.1.0`
+- OCI: `helm install retry-node-1 oci://ghcr.io/lightwebinc/charts/retry-endpoint --version 0.3.0`
 
 `config.nackAddr` is effectively required — the chart emits a `helm.sh/chart-warnings` annotation when empty. The chart does **not** bundle a Redis subchart; operators install Redis separately when `config.cacheBackend=redis`. See the chart README for the full reference.
 

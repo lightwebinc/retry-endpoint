@@ -8,7 +8,7 @@ fabric. It joins all shard groups plus `GroupBlockBroadcast` (BRC-131 / BRC-134)
 unicast NACK requests from listeners that detect sequence gaps.
 
 BRC wire formats live in
-[bsv-multicast/docs/](../../../bsv-multicast/docs/). On a cache hit it
+[bsv-multicast/docs/](https://github.com/lightwebinc/bsv-multicast/tree/main/docs). On a cache hit it
 retransmits the frame via multicast egress and/or directly to the requesting listener
 via unicast, then sends an ACK response. On a miss it sends a MISS response so the
 listener can escalate immediately to the next endpoint.
@@ -56,7 +56,8 @@ listener→downstream-consumer hop. This lets consumers downstream of a
 The pattern relies on the listener's
 [multicast egress / domain bridging](https://github.com/lightwebinc/shard-listener/blob/main/docs/configuration.md).
 When `-mc-egress-enabled=true` the listener re-emits each filtered frame
-**verbatim** (full 92-byte frame; requires `-strip-header=false`) into a
+**verbatim** (full frame with the 92-byte header intact; requires
+`-strip-header=false`) into a
 downstream multicast address space, keeping the proxy-stamped `HashKey` /
 `SeqNum` / `TxID` intact. Because flow identity survives the bridge:
 
@@ -274,7 +275,7 @@ uniquely identify every frame within a flow. No secondary index is needed.
 `[nackBindAddr]:nack-port`. Each worker:
 
 1. Reads one 64-byte NACK datagram (BRC-126 wire format).
-2. Applies four-tier rate limiting (per-IP, per-HashKey, per-SeqNum pre-lookup;
+2. Applies four-tier rate limiting (per-IP, per-SeqNum, per-chain pre-lookup;
    per-group post-lookup). Throttled requests are answered with THROTTLED when
    `-rl-throttle-response` is set (sequence/chain/group tiers; the IP flood
    tier never answers) and dropped silently otherwise.
@@ -287,16 +288,11 @@ uniquely identify every frame within a flow. No secondary index is needed.
 
 ### NACK wire format (BRC-126) — 64 bytes
 
-| Offset | Size | Field     | Value / notes                                                 |
-| ------ | ---- | --------- | ------------------------------------------------------------- |
-| 0      | 4    | Magic     | 0xE3E1F3E8                                                    |
-| 4      | 2    | ProtoVer  | 0x02BF                                                        |
-| 6      | 1    | MsgType   | 0x10 (NACK)                                                   |
-| 7      | 1    | Flags     | Reserved; must be 0x00                                        |
-| 8      | 8    | HashKey   | uint64 BE; stable per-flow XXH64 identifier                   |
-| 16     | 8    | StartSeq  | uint64 BE; first missing SeqNum (inclusive)                    |
-| 24     | 8    | EndSeq    | uint64 BE; last missing SeqNum (inclusive; == StartSeq for 1)  |
-| 32     | 32   | SubtreeID | 32-byte batch identifier; zeros = unset                       |
+The canonical field layout lives in
+[BRC-126 — Retransmission Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md).
+The server consumes `HashKey`, `StartSeq`/`EndSeq`, `SubtreeID`, and the Flags
+byte — bit 0 (`0x01`) = Proxied (see
+[NACK proxying](#nack-proxying-cross-domain-recovery)); bits 1–7 reserved `0x00`.
 
 ### ACK/MISS wire format — 16 bytes
 
@@ -380,11 +376,12 @@ The beacon sender runs as a separate goroutine and fires every `beacon-interval`
 (default 60 s). It sends a 56-byte ADVERT datagram to the configured beacon
 multicast group:
 
-| `-beacon-scope` | Group           | Purpose                            |
-| --------------- | --------------- | ---------------------------------- |
-| `site`          | `FF05::B:FFFD` | Intra-site listener discovery      |
-| `global`        | `FF0E::B:FFFD` | Inter-AS discovery via MP-BGP MVPN |
-| `both`          | both            | Mixed deployments                  |
+| `-beacon-scope` | Group(s)         | Purpose                                        |
+| --------------- | ---------------- | ---------------------------------------------- |
+| `site`          | `FF05::B:FFFD`   | Intra-site listener discovery                  |
+| `org`           | `FF08::B:FFFD`   | Organisation-wide discovery                    |
+| `global`        | `FF0E::B:FFFD`   | Inter-AS discovery via MP-BGP MVPN             |
+| `both` / `all`  | all three groups | Mixed deployments (three ADVERTs per interval) |
 
 The ADVERT carries the endpoint's NACKAddr, NACKPort, Tier, Preference, Flags,
 and a stable InstanceID (CRC32c hash of the hostname). Listeners upsert endpoints
@@ -407,11 +404,11 @@ retransmit dispatched.
 | #   | Level                 | Algorithm      | Position    | Config flags                              |
 | --- | --------------------- | -------------- | ----------- | ----------------------------------------- |
 | 1   | Per source IP         | Token bucket   | Pre-lookup  | `-rl-ip-rate`, `-rl-ip-burst`             |
-| 2   | Per (srcIP, HashKey)  | Sliding window | Pre-lookup  | `-rl-chain-rate`, `-rl-chain-window`      |
-| 3   | Per SeqNum            | Sliding window | Pre-lookup  | `-rl-sequence-max`, `-rl-sequence-window` |
+| 2   | Per SeqNum            | Sliding window | Pre-lookup  | `-rl-sequence-max`, `-rl-sequence-window` |
+| 3   | Per (srcIP, HashKey)  | Sliding window | Pre-lookup  | `-rl-chain-rate`, `-rl-chain-window`      |
 | 4   | Per (srcIP, groupIdx) | Token bucket   | Post-lookup | `-rl-group-rate`, `-rl-group-burst`       |
 
-`HashKey=0` (unstamped frame) bypasses tier 2 to avoid bucketing all
+`HashKey=0` (unstamped frame) bypasses tier 3 to avoid bucketing all
 unattributed gaps from the same source together.
 
 ## Graceful shutdown

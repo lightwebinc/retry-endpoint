@@ -225,8 +225,8 @@ ADVERT beacon. If empty, the first non-link-local global-unicast IPv6 address
 on the first `-egress-iface` is used.
 
 > **Multi-homed hosts:** On a host with both a management NIC and a fabric NIC,
-> the fabric NIC will typically have both a static address (e.g. `fd20::24`)
-> and a SLAAC-derived address (e.g. `fd20::216:3eff:fe4c:8a01`). If the NACK
+> the fabric NIC will typically have both a static address (e.g. `2001:db8::24`)
+> and a SLAAC-derived address (e.g. `2001:db8::216:3eff:fe00:1`). If the NACK
 > socket is bound to `[::]`, the kernel may choose the SLAAC address as the
 > source of outgoing ACK/MISS responses. Listeners filtering by the advertised
 > address will then silently drop the responses.
@@ -328,9 +328,12 @@ when full, since the requester already received MISS and will retry/escalate.
 
 ## Rate Limiting
 
-Four tiers applied in order. Tiers 1–3 are pre-lookup; drops are silent (no
-response sent). Tier 4 is post-lookup: the retransmit is skipped but an ACK is
-still sent so the listener does not escalate to the next endpoint.
+Four tiers applied in order: per-IP, per-SeqNum, per-chain (pre-lookup), then
+per-group (post-lookup, cache hits only). All four tiers drop silently by
+default. With `-rl-throttle-response` the honest-congestion tiers (SeqNum,
+chain, group) answer with a 16-byte THROTTLED hint instead; the per-IP flood
+tier never answers (reflection guard). The group tier never sends ACK on
+throttle — an ACK would cancel the listener gap with no retransmit dispatched.
 
 ### `-rl-ip-rate` / `RL_IP_RATE` (default: `100`)
 
@@ -427,13 +430,15 @@ seconds field). Listeners evict endpoints that have not sent an ADVERT within
 
 Multicast scope for ADVERT datagrams.
 
-| Value    | Group          | Use case                                                |
-| -------- | -------------- | ------------------------------------------------------- |
-| `site`   | `FF05::B:FFFD` | All listeners on the local site                         |
-| `global` | `FF0E::B:FFFD` | Inter-AS via MP-BGP MVPN                                |
-| `both`   | both groups    | Site + global simultaneously (two ADVERTs per interval) |
+| Value            | Group(s)         | Use case                                                       |
+| ---------------- | ---------------- | -------------------------------------------------------------- |
+| `site`           | `FF05::B:FFFD`   | All listeners on the local site                                |
+| `org`            | `FF08::B:FFFD`   | Organisation-wide discovery                                    |
+| `global`         | `FF0E::B:FFFD`   | Inter-AS via MP-BGP MVPN                                       |
+| `both` / `all`   | all three groups | Site + org + global simultaneously (three ADVERTs per interval) |
 
-Org scope (`FF08::B:FFFD`, wire byte `0x08`) is defined in the BRC-126 wire format but `org` is not a supported flag value.
+`both` and `all` are synonyms: they set the ADVERT wire scope byte to `0xFF`
+and emit one ADVERT to each of the three groups per interval.
 
 ### `-beacon-flags-multicast` / `BEACON_FLAGS_MULTICAST` (default: `true`)
 
@@ -455,8 +460,8 @@ re-injection cannot repair a *remote* receiver there — PIM-SSM RPF lets only t
 source node inject into its own `(S,G)` tree — so unicast is the only working
 return channel. Pair this with **no `-bind-source`** so the cache holds its own
 source too (the origin becomes the last-resort repairer), and the consumer
-listener must bind its NACK socket to a routable `/128` (the commercial variant
-exposes `-nack-source`) or the unicast reply is misrouted off the tunnel.
+listener must bind its NACK socket to a routable `/128` or the unicast reply
+is misrouted off the tunnel.
 
 ### `-beacon-flags-draining` / `BEACON_FLAGS_DRAINING` (default: `false`)
 
@@ -539,7 +544,7 @@ and a `bre_host_info` gauge.
 | `bre_retransmits_total`                                          | Frames sent to multicast egress                                     |
 | `bre_unicast_retransmits_total`                                  | Frames sent unicast back to the NACK requester                      |
 | `bre_retransmit_dedup_total`                                     | Retransmits skipped by cross-instance dedup (requires `REDIS_ADDR`) |
-| `bre_rate_limit_drops_total{level=ip\|hashkey\|sequence\|group}` | Requests dropped (or retransmit suppressed) by rate limiter tier    |
+| `bre_rate_limit_drops_total{level=ip\|chain\|sequence\|group}`   | Requests dropped (or retransmit suppressed) by rate limiter tier    |
 | `bre_proxy_requests_total`                                       | Cross-domain proxy recovery jobs started                            |
 | `bre_proxy_recovered_total`                                      | Frames recovered from upstream and re-cached                        |
 | `bre_proxy_failed_total{reason}`                                 | Proxy jobs that found no frame upstream                             |
@@ -570,8 +575,8 @@ retry-endpoint \
   -egress-iface enp6s0 \
   -shard-bits 2 \
   -cache-backend memory \
-  -redis-addr 10.10.10.40:6379 \
-  -nack-addr fd20::24 \
+  -redis-addr redis.local:6379 \
+  -nack-addr 2001:db8::24 \
   -beacon-tier 0 \
   -beacon-preference 128 \
   -metrics-addr :9400
@@ -586,7 +591,7 @@ retry-endpoint \
   -shard-bits 2 \
   -cache-backend redis \
   -redis-addr redis.local:6379 \
-  -nack-addr fd20::24 \
+  -nack-addr 2001:db8::24 \
   -beacon-tier 0 \
   -beacon-preference 128 \
   -metrics-addr :9400
