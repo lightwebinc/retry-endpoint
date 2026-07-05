@@ -59,7 +59,7 @@ type Config struct {
 	// Ingress (multicast receive)
 	MCIface    string // NIC for multicast ingress
 	ListenPort int    // Multicast listen port
-	ShardBits  uint   // Number of txid prefix bits used as the group key (1–15)
+	ShardBits  uint   // Number of txid prefix bits used as the group key (1–12)
 	NumGroups  uint32 // Derived: 1 << ShardBits
 	MCScope    string // "site" | "global" — also accepts legacy "link"/"org" in ASM mode
 	MCPrefix   uint16 // Derived from (SourceMode, MCScope) — upper 16 bits of the IPv6 group address
@@ -308,7 +308,7 @@ func Load() (*Config, error) {
 
 	shardBitsDefault := uint(envInt("SHARD_BITS", 2))
 	bits := flag.Uint("shard-bits", shardBitsDefault,
-		"txid prefix bit width used as the shard key (1–15)")
+		"txid prefix bit width used as the shard key (1–12)")
 
 	// Beacon flags.
 	flag.BoolVar(&c.BeaconEnabled, "beacon-enabled", envBool("BEACON_ENABLED", true),
@@ -370,10 +370,10 @@ func Load() (*Config, error) {
 	c.BeaconTier = *beaconTier
 	c.BeaconPreference = *beaconPref
 
-	// Validate shard bit width. Top of the 16-bit shard space is reserved for
-	// control-plane groups (0xFFFC–0xFFFE), so practical bits is bounded at 15.
-	if *bits < 1 || *bits > 15 {
-		return nil, fmt.Errorf("shard-bits must be in [1, 15], got %d", *bits)
+	// Validate shard bit width. BRC-129 zones the 16-bit shard space: shard
+	// group indices are 0x0000–0x0FFF, so bits is bounded at 12.
+	if *bits < 1 || *bits > 12 {
+		return nil, fmt.Errorf("shard-bits must be in [1, 12], got %d", *bits)
 	}
 	c.ShardBits = *bits
 	c.NumGroups = 1 << c.ShardBits
