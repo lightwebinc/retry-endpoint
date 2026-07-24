@@ -213,6 +213,15 @@ func (w *Worker) processFrame(raw []byte) {
 		return
 	}
 
+	// BRC-130 fragments (FrameVer 0x03) are cached individually: each
+	// fragment carries its own HashKey/SeqNum at the standard offsets, so
+	// per-fragment NACK recovery works exactly like whole frames. The TTL
+	// follows the original frame class (OrigFrameVer).
+	if frame.IsFragment(raw) {
+		w.processFragmentFrame(raw)
+		return
+	}
+
 	f, err := frame.Decode(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -282,6 +291,53 @@ func (w *Worker) processBEEFFrame(raw []byte) {
 	binary.BigEndian.PutUint64(key[0:8], bf.HashKey)
 	binary.BigEndian.PutUint64(key[8:16], bf.SeqNum)
 	if err := w.cache.Store(key[:], raw, w.ttls.BEEF); err != nil {
+		if w.rec != nil {
+			w.rec.CacheError()
+		}
+		w.log.Error("cache store error", "err", err)
+		return
+	}
+	if w.rec != nil {
+		w.rec.FrameCached()
+	}
+}
+
+// processFragmentFrame caches one BRC-130 fragment under its
+// (HashKey, SeqNum) flow key. The cache TTL follows the fragmented class
+// (OrigFrameVer); the retransmit path re-derives the group from the
+// fragment's own header fields per that class.
+func (w *Worker) processFragmentFrame(raw []byte) {
+	ff, err := frame.DecodeFragment(raw)
+	if err != nil {
+		if w.rec != nil {
+			w.rec.FrameDropped("decode_error")
+		}
+		if w.debug {
+			w.log.Debug("fragment decode error", "err", err, "len", len(raw))
+		}
+		return
+	}
+	if w.rec != nil {
+		w.rec.FrameReceived()
+	}
+	if ff.SeqNum == 0 {
+		return // not stamped at ingress
+	}
+	ttl := w.ttls.Tx
+	switch ff.OrigFrameVer {
+	case frame.FrameVerV4:
+		ttl = w.ttls.Block
+	case frame.FrameVerV5:
+		ttl = w.ttls.Subtree
+	case frame.FrameVerV6:
+		ttl = w.ttls.Anchor
+	case frame.FrameVerV9:
+		ttl = w.ttls.BEEF
+	}
+	var key [16]byte
+	binary.BigEndian.PutUint64(key[0:8], ff.HashKey)
+	binary.BigEndian.PutUint64(key[8:16], ff.SeqNum)
+	if err := w.cache.Store(key[:], raw, ttl); err != nil {
 		if w.rec != nil {
 			w.rec.CacheError()
 		}

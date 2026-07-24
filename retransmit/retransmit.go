@@ -169,6 +169,28 @@ func (r *Retransmitter) targetGroup(raw []byte, txID [32]byte) (*net.UDPAddr, er
 			var topicID [32]byte
 			copy(topicID[:], raw[56:88])
 			return r.engine.Addr(r.beefEngine.GroupIndex(&topicID), r.egressPort), nil
+		case frame.FrameVerV3:
+			// BRC-130 fragment: route per the fragmented class (protocol
+			// rule: "same as the original frame's group").
+			if ff, err := frame.DecodeFragment(raw); err == nil {
+				switch ff.OrigFrameVer {
+				case frame.FrameVerV4, frame.FrameVerV6:
+					ctrlIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupBlockBroadcast)
+					return &net.UDPAddr{IP: ctrlIP, Port: r.egressPort}, nil
+				case frame.FrameVerV5:
+					subtreeIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupSubtreeDataAnnounce)
+					return &net.UDPAddr{IP: subtreeIP, Port: r.egressPort}, nil
+				case frame.FrameVerV9:
+					if r.beefEngine == nil {
+						return nil, fmt.Errorf("retransmit: BEEF fragment cached but plane disabled")
+					}
+					topicID := ff.SubtreeID // TopicID rides the SubtreeID slot
+					return r.engine.Addr(r.beefEngine.GroupIndex(&topicID), r.egressPort), nil
+				default:
+					groupIdx := r.engine.GroupIndex(&ff.TxID)
+					return r.engine.Addr(groupIdx, r.egressPort), nil
+				}
+			}
 		case frame.FrameVerV8:
 			// BRC-142 bundle: the group is carried in the header (offset 56),
 			// not derived from a TxID (a bundle has none).
