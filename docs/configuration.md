@@ -616,3 +616,17 @@ retry-endpoint \
 Every flag documented in this file is exposed under `.config` in the corresponding Helm chart's `values.yaml`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
 
 Chart: [`lightwebinc/retry-endpoint-helm`](https://github.com/lightwebinc/retry-endpoint-helm) — `config.nackAddr` is effectively required; no Redis subchart bundled.
+
+## BRC-148 BEEF object plane
+
+| Flag / Env | Default | Description |
+|------------|---------|-------------|
+| `-beef-enabled` / `BEEF_ENABLED` | `false` | Join the BEEF plane band (`0x1000 + 2^beef-shard-bits` groups) and cache V9 frames |
+| `-beef-shard-bits` / `BEEF_SHARD_BITS` | `4` | Plane width; must match the proxy (retransmit groups re-derive from the TopicID at this width) |
+| `-cache-ttl-beef` / `CACHE_TTL_BEEF` | `60s` | V9 cache TTL (live-tail resend window); independent of the `CACHE_TTL` collapse |
+
+V9 frames cache under the standard HashKey ∥ SeqNum key; the retransmit
+target is re-derived from the **TopicID at offset 56** (never offset 8 — the
+ContentID is not a shard key). BRC-130 fragments now cache individually as
+well (TTL per `OrigFrameVer`, incl. V9) and retransmit per the fragmented
+class; note the listener does not yet NACK missing fragments.
