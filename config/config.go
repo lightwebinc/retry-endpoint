@@ -43,6 +43,7 @@ const (
 	defaultCacheTTLBlock   = 10 * time.Minute // BRC-131 block control
 	defaultCacheTTLSubtree = 5 * time.Minute  // BRC-132 subtree data
 	defaultCacheTTLAnchor  = 2 * time.Minute  // BRC-134 anchor tx
+	defaultCacheTTLBEEF    = 60 * time.Second // BRC-148 BEEF object (live-tail resend window)
 )
 
 // Scopes maps a human-readable scope name to the two-byte big-endian IPv6
@@ -105,6 +106,14 @@ type Config struct {
 	CacheTTLBlock   time.Duration // FrameVer V4 (BRC-131 block control)
 	CacheTTLSubtree time.Duration // FrameVer V5 (BRC-132 subtree data)
 	CacheTTLAnchor  time.Duration // FrameVer V6 (BRC-134 anchor tx)
+	CacheTTLBEEF    time.Duration // FrameVer V9 (BRC-148 BEEF object); own flag, outside the CACHE_TTL collapse
+
+	// BRC-148 BEEF object plane. When enabled the endpoint joins the plane's
+	// band groups (0x1000 + 2^BEEFShardBits) and caches/retransmits V9
+	// frames; the retransmit group derives from the TopicID at the plane
+	// width, which must match the proxy's.
+	BEEFEnabled   bool
+	BEEFShardBits uint
 
 	// Server (NACK receive)
 	NACKPort    int // NACK listen port (default 9300)
@@ -212,6 +221,12 @@ func Load() (*Config, error) {
 		"cache TTL for subtree data frames (BRC-132, FrameVer V5)")
 	flag.DurationVar(&c.CacheTTLAnchor, "cache-ttl-anchor", envDuration("CACHE_TTL_ANCHOR", defaultCacheTTLAnchor),
 		"cache TTL for anchor tx frames (BRC-134, FrameVer V6)")
+	flag.DurationVar(&c.CacheTTLBEEF, "cache-ttl-beef", envDuration("CACHE_TTL_BEEF", defaultCacheTTLBEEF),
+		"cache TTL for BEEF object frames (BRC-148, FrameVer V9)")
+	flag.BoolVar(&c.BEEFEnabled, "beef-enabled", envBool("BEEF_ENABLED", false),
+		"join and serve the BRC-148 BEEF plane band (0x1000 + 2^beef-shard-bits groups)")
+	beefBits := flag.Uint("beef-shard-bits", uint(envInt("BEEF_SHARD_BITS", 4)),
+		"BRC-148 BEEF plane shard-bit width (1-12); must match proxy")
 	flag.IntVar(&c.CacheMaxKeys, "cache-max-keys", envInt("CACHE_MAX_KEYS", 0),
 		"maximum number of keys in cache (0 = no limit)")
 
@@ -376,6 +391,10 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("shard-bits must be in [1, 12], got %d", *bits)
 	}
 	c.ShardBits = *bits
+	if *beefBits < 1 || *beefBits > 12 {
+		return nil, fmt.Errorf("beef-shard-bits must be in [1, 12], got %d", *beefBits)
+	}
+	c.BEEFShardBits = *beefBits
 	c.NumGroups = 1 << c.ShardBits
 	c.OTLPInterval = *otlpInterval
 

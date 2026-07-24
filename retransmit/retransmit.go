@@ -21,6 +21,7 @@ import (
 // Retransmitter handles retransmitting cached frames.
 type Retransmitter struct {
 	engine      *shard.Engine
+	beefEngine  *shard.PlaneEngine // nil = BRC-148 plane disabled (V9 retransmits error)
 	ifaces      []*net.Interface
 	egressPort  int
 	dedupWindow time.Duration
@@ -136,6 +137,51 @@ func (r *Retransmitter) RetransmitUnicast(raw []byte, dst *net.UDPAddr) error {
 	return nil
 }
 
+// SetBEEF wires the BRC-148 plane engine used to derive a cached BEEF
+// frame's domain-tagged retransmit group from its TopicID. Call before Open.
+func (r *Retransmitter) SetBEEF(pe *shard.PlaneEngine) { r.beefEngine = pe }
+
+
+// targetGroup derives the retransmission destination for a cached frame,
+// re-computed from the frame's own fields per FrameVer:
+//   - V4/V6: GroupBlockBroadcast (0xFFFE)
+//   - V5:    GroupSubtreeDataAnnounce (0xFFFB)
+//   - V8:    the group index carried in the bundle header (offset 56)
+//   - V9:    BRC-148 domain-tagged group from the TopicID at offset 56 at
+//     the BEEF plane's width — never from offset 8 (the ContentID)
+//   - else:  shard group derived from the TxID
+func (r *Retransmitter) targetGroup(raw []byte, txID [32]byte) (*net.UDPAddr, error) {
+	if len(raw) >= 7 {
+		switch raw[6] {
+		case frame.FrameVerV4, frame.FrameVerV6:
+			ctrlIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupBlockBroadcast)
+			return &net.UDPAddr{IP: ctrlIP, Port: r.egressPort}, nil
+		case frame.FrameVerV5:
+			subtreeIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupSubtreeDataAnnounce)
+			return &net.UDPAddr{IP: subtreeIP, Port: r.egressPort}, nil
+		case frame.FrameVerV9:
+			if r.beefEngine == nil {
+				return nil, fmt.Errorf("retransmit: BEEF frame cached but plane disabled")
+			}
+			if len(raw) < 88 {
+				return nil, fmt.Errorf("retransmit: BEEF frame too short for TopicID")
+			}
+			var topicID [32]byte
+			copy(topicID[:], raw[56:88])
+			return r.engine.Addr(r.beefEngine.GroupIndex(&topicID), r.egressPort), nil
+		case frame.FrameVerV8:
+			// BRC-142 bundle: the group is carried in the header (offset 56),
+			// not derived from a TxID (a bundle has none).
+			if len(raw) >= 58 {
+				groupIdx := uint32(binary.BigEndian.Uint16(raw[56:58]))
+				return r.engine.Addr(groupIdx, r.egressPort), nil
+			}
+		}
+	}
+	groupIdx := r.engine.GroupIndex(&txID)
+	return r.engine.Addr(groupIdx, r.egressPort), nil
+}
+
 // Retransmit sends a cached frame to the multicast network.
 func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 	// Cross-instance deduplication via backend SETNX.
@@ -159,39 +205,9 @@ func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 		}
 	}
 
-	// Derive multicast group based on frame version:
-	// - V4 (FrameVerV4): BRC-131 block control → GroupBlockBroadcast (0xFFFE)
-	// - V5 (FrameVerV5): BRC-132 subtree data  → GroupSubtreeDataAnnounce (0xFFFB)
-	// - All others:      shard group derived from TxID
-	var groupAddr *net.UDPAddr
-	if len(raw) >= 7 {
-		switch raw[6] {
-		case frame.FrameVerV4:
-			ctrlIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupBlockBroadcast)
-			groupAddr = &net.UDPAddr{IP: ctrlIP, Port: r.egressPort}
-		case frame.FrameVerV5:
-			subtreeIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupSubtreeDataAnnounce)
-			groupAddr = &net.UDPAddr{IP: subtreeIP, Port: r.egressPort}
-		case frame.FrameVerV6:
-			ctrlIP := shard.GroupAddr(r.engine.Prefix(), r.engine.GroupID(), shard.GroupBlockBroadcast)
-			groupAddr = &net.UDPAddr{IP: ctrlIP, Port: r.egressPort}
-		case frame.FrameVerV8:
-			// BRC-142 bundle: the group is carried in the header (offset 56),
-			// not derived from a TxID (a bundle has none).
-			if len(raw) >= 58 {
-				groupIdx := uint32(binary.BigEndian.Uint16(raw[56:58]))
-				groupAddr = r.engine.Addr(groupIdx, r.egressPort)
-			} else {
-				groupIdx := r.engine.GroupIndex(&txID)
-				groupAddr = r.engine.Addr(groupIdx, r.egressPort)
-			}
-		default:
-			groupIdx := r.engine.GroupIndex(&txID)
-			groupAddr = r.engine.Addr(groupIdx, r.egressPort)
-		}
-	} else {
-		groupIdx := r.engine.GroupIndex(&txID)
-		groupAddr = r.engine.Addr(groupIdx, r.egressPort)
+	groupAddr, gerr := r.targetGroup(raw, txID)
+	if gerr != nil {
+		return gerr
 	}
 
 	r.mu.Lock()

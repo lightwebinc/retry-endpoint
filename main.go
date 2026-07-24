@@ -141,6 +141,18 @@ func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.Grou
 			}
 			gs[ga] = srcs
 		}
+		// BRC-148 plane band groups inherit the same announced roster
+		// (object planes publish from the transaction plane's sources).
+		if cfg.BEEFEnabled {
+			for i := uint32(0); i < 1<<cfg.BEEFShardBits; i++ {
+				ip := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupIdx(0x1000+i))
+				ga, ok := netip.AddrFromSlice(ip.To16())
+				if !ok {
+					continue
+				}
+				gs[ga] = srcs
+			}
+		}
 	}
 	return gs, nil
 }
@@ -261,6 +273,14 @@ func run() error {
 	// Build shard engine.
 	engine := shard.New(cfg.MCPrefix, cfg.MCGroupID, cfg.ShardBits)
 
+	// BRC-148 BEEF plane engine (domain-tagged group derivation from
+	// TopicIDs). Always constructed so cached V9 frames retransmit
+	// correctly; the band is only JOINED when -beef-enabled is set.
+	beefEngine, err := shard.NewPlane(cfg.MCPrefix, cfg.MCGroupID, cfg.BEEFShardBits, shard.DomainBEEF)
+	if err != nil {
+		return fmt.Errorf("beef plane: %w", err)
+	}
+
 	// Build the modular cache backend (memory | redis | aerospike). The
 	// frame store and the cross-instance dedup gate share one backend via
 	// independent key prefixes ("bre:frame:" and "bre:dedup:").
@@ -360,6 +380,7 @@ func run() error {
 
 	// Build retransmitter.
 	retrans := retransmit.New(engine, egressIfaces, cfg.EgressPort, cfg.DedupWindow, dedup, rec, cfg.Debug)
+	retrans.SetBEEF(beefEngine)
 	retrans.SetUnicastSource(nackBindIP)
 	retrans.SetMulticastLoop(cfg.EgressMulticastLoop)
 	if err := retrans.Open(); err != nil {
@@ -374,6 +395,7 @@ func run() error {
 	srv.SetSuppressMISS(cfg.SuppressMISS)
 	srv.SetThrottleResponse(cfg.ThrottleResponse)
 	srv.SetShardEngine(engine)
+	srv.SetBEEFEngine(beefEngine)
 	srv.SetRetransmitModes(cfg.BeaconFlagsMulticast, cfg.BeaconFlagsUnicast)
 
 	// NACK proxying: recover cache misses from an upstream retry-endpoint.
@@ -402,6 +424,7 @@ func run() error {
 				Block:   cfg.CacheTTLBlock,
 				Subtree: cfg.CacheTTLSubtree,
 				Anchor:  cfg.CacheTTLAnchor,
+				BEEF:    cfg.CacheTTLBEEF,
 			},
 			Rec: rec,
 		})
@@ -414,6 +437,7 @@ func run() error {
 		Block:   cfg.CacheTTLBlock,
 		Subtree: cfg.CacheTTLSubtree,
 		Anchor:  cfg.CacheTTLAnchor,
+		BEEF:    cfg.CacheTTLBEEF,
 	}, cfg.Debug)
 
 	done := make(chan struct{})
@@ -580,6 +604,14 @@ func buildGroups(cfg *config.Config, engine *shard.Engine) ([]*net.UDPAddr, erro
 	if cfg.SubtreeDataEnabled {
 		subtreeDataIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupSubtreeDataAnnounce)
 		groups = append(groups, &net.UDPAddr{IP: subtreeDataIP, Port: cfg.ListenPort})
+	}
+
+	// Join the BRC-148 BEEF plane band when enabled so V9 frames are cached
+	// for retransmission.
+	if cfg.BEEFEnabled {
+		for i := uint32(0); i < 1<<cfg.BEEFShardBits; i++ {
+			groups = append(groups, engine.Addr(0x1000+i, cfg.ListenPort))
+		}
 	}
 
 	return groups, nil

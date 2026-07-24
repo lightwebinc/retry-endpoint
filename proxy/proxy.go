@@ -65,6 +65,7 @@ type TTLConfig struct {
 	Block   time.Duration
 	Subtree time.Duration
 	Anchor  time.Duration
+	BEEF    time.Duration // BRC-148 BEEF object (FrameVer V9)
 }
 
 // Config holds the proxy client's dependencies and tuning.
@@ -283,6 +284,8 @@ func (c *Client) ttlFor(ver byte) time.Duration {
 		return c.cfg.TTLs.Subtree
 	case frame.FrameVerV6:
 		return c.cfg.TTLs.Anchor
+	case frame.FrameVerV9:
+		return c.cfg.TTLs.BEEF
 	default:
 		return c.cfg.TTLs.Tx
 	}

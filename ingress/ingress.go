@@ -54,6 +54,7 @@ type TTLConfig struct {
 	Block   time.Duration // FrameVer V4 (BRC-131 block control)
 	Subtree time.Duration // FrameVer V5 (BRC-132 subtree data)
 	Anchor  time.Duration // FrameVer V6 (BRC-134 anchor tx)
+	BEEF    time.Duration // FrameVer V9 (BRC-148 BEEF object)
 }
 
 // GroupSources maps a multicast group address (16-byte IPv6 in dotted
@@ -204,6 +205,14 @@ func (w *Worker) processFrame(raw []byte) {
 		return
 	}
 
+	// BRC-148 BEEF object frames (FrameVer 0x09) are handled separately
+	// because frame.Decode rejects V9 with ErrBadVer. Like every cached
+	// class, the flow key is (HashKey, SeqNum) at fixed offsets.
+	if frame.IsBEEFFrame(raw) {
+		w.processBEEFFrame(raw)
+		return
+	}
+
 	f, err := frame.Decode(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -245,6 +254,42 @@ func (w *Worker) processFrame(raw []byte) {
 			"hash_key", f.HashKey,
 			"seq_num", f.SeqNum,
 		)
+	}
+}
+
+// processBEEFFrame handles BRC-148 BEEF object frames (FrameVer 0x09),
+// cached by their (HashKey, SeqNum) flow key with the BEEF TTL. The
+// retransmit path re-derives the domain-tagged group from the frame's
+// TopicID at offset 56 — never from offset 8, which carries the ContentID.
+func (w *Worker) processBEEFFrame(raw []byte) {
+	bf, err := frame.DecodeBEEF(raw)
+	if err != nil {
+		if w.rec != nil {
+			w.rec.FrameDropped("decode_error")
+		}
+		if w.debug {
+			w.log.Debug("beef decode error", "err", err, "len", len(raw))
+		}
+		return
+	}
+	if w.rec != nil {
+		w.rec.FrameReceived()
+	}
+	if bf.SeqNum == 0 {
+		return // not stamped at ingress
+	}
+	var key [16]byte
+	binary.BigEndian.PutUint64(key[0:8], bf.HashKey)
+	binary.BigEndian.PutUint64(key[8:16], bf.SeqNum)
+	if err := w.cache.Store(key[:], raw, w.ttls.BEEF); err != nil {
+		if w.rec != nil {
+			w.rec.CacheError()
+		}
+		w.log.Error("cache store error", "err", err)
+		return
+	}
+	if w.rec != nil {
+		w.rec.FrameCached()
 	}
 }
 

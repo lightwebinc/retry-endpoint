@@ -71,6 +71,7 @@ type Server struct {
 	suppressMISS bool          // if true, do not send MISS responses
 	throttleResp bool          // if true, answer honest-congestion throttles with a THROTTLED hint
 	shardEngine  *shard.Engine // for post-lookup group index derivation; nil = skip group limiter
+	beefEngine  *shard.PlaneEngine // nil = derive BEEF rate-limit group from offset 8 (stable fallback)
 	retransmitMC bool          // multicast retransmit on cache hit (default true)
 	retransmitUC bool          // unicast retransmit (frame back to requester) on cache hit
 	proxy        ProxyEnqueuer // nil = NACK proxying disabled
@@ -140,6 +141,12 @@ func (s *Server) SetThrottleResponse(v bool) { s.throttleResp = v }
 // kernel source-address selection (which may pick a SLAAC-derived address
 // that does not match what listeners expect).
 func (s *Server) SetBindAddr(addr string) { s.bindAddr = addr }
+
+// SetBEEFEngine wires the BRC-148 plane engine used to derive a BEEF
+// frame's rate-limit group from its TopicID. Optional; without it BEEF
+// frames rate-limit under the (meaningless but stable) ContentID-derived
+// group.
+func (s *Server) SetBEEFEngine(pe *shard.PlaneEngine) { s.beefEngine = pe }
 
 // SetShardEngine wires the shard engine used to derive groupIdx from TxID
 // for the post-lookup group rate limiter. Must be called before Run.
@@ -370,6 +377,14 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		// (offset 56), so derive the rate-limit group from there.
 		if frame.IsBundle(raw) && len(raw) >= 58 {
 			groupIdx = uint32(binary.BigEndian.Uint16(raw[56:58]))
+		}
+		// A BRC-148 BEEF frame's offset-8 field is the ContentID, not a
+		// shard key; its rate-limit group derives from the TopicID at
+		// offset 56 (domain-tagged when the plane engine is wired).
+		if frame.IsBEEFFrame(raw) && len(raw) >= 88 && s.beefEngine != nil {
+			var topicID [32]byte
+			copy(topicID[:], raw[56:88])
+			groupIdx = s.beefEngine.GroupIndex(&topicID)
 		}
 		if !s.rateLimiter.AllowGroup(srcIP, groupIdx) {
 			if s.rec != nil {
