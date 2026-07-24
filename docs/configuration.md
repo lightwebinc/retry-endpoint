@@ -629,4 +629,4 @@ V9 frames cache under the standard HashKey ∥ SeqNum key; the retransmit
 target is re-derived from the **TopicID at offset 56** (never offset 8 — the
 ContentID is not a shard key). BRC-130 fragments now cache individually as
 well (TTL per `OrigFrameVer`, incl. V9) and retransmit per the fragmented
-class; note the listener does not yet NACK missing fragments.
+class; the listener now NACKs interior fragment loss (shard-listener), so pushed-object fragment recovery is end-to-end (tail-only loss still relies on reassembly timeout).
