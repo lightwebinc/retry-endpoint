@@ -391,7 +391,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("shard-bits must be in [1, 12], got %d", *bits)
 	}
 	c.ShardBits = *bits
-	if *beefBits < 1 || *beefBits > 12 {
+	if *beefBits > 12 {
 		return nil, fmt.Errorf("beef-shard-bits must be in [0, 12], got %d", *beefBits)
 	}
 	c.BEEFShardBits = *beefBits
