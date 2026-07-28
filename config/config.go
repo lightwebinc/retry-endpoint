@@ -226,7 +226,7 @@ func Load() (*Config, error) {
 	flag.BoolVar(&c.BEEFEnabled, "beef-enabled", envBool("BEEF_ENABLED", false),
 		"join and serve the BRC-148 BEEF plane band (0x1000 + 2^beef-shard-bits groups)")
 	beefBits := flag.Uint("beef-shard-bits", uint(envInt("BEEF_SHARD_BITS", 4)),
-		"BRC-148 BEEF plane shard-bit width (1-12); must match proxy")
+		"BRC-148 BEEF plane shard-bit width (0-12, 0 = single group); must match proxy")
 	flag.IntVar(&c.CacheMaxKeys, "cache-max-keys", envInt("CACHE_MAX_KEYS", 0),
 		"maximum number of keys in cache (0 = no limit)")
 
@@ -392,7 +392,7 @@ func Load() (*Config, error) {
 	}
 	c.ShardBits = *bits
 	if *beefBits < 1 || *beefBits > 12 {
-		return nil, fmt.Errorf("beef-shard-bits must be in [1, 12], got %d", *beefBits)
+		return nil, fmt.Errorf("beef-shard-bits must be in [0, 12], got %d", *beefBits)
 	}
 	c.BEEFShardBits = *beefBits
 	c.NumGroups = 1 << c.ShardBits
