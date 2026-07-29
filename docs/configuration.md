@@ -286,6 +286,28 @@ into this endpoint's domain. This closes the "frames the bridging listener never
 emitted" hole for a downstream domain. See the architecture doc's
 [NACK proxying](architecture.md#nack-proxying-cross-domain-recovery) section.
 
+**Two topologies need it, not one.** Besides a bridged downstream domain, it is
+the mechanism for a PEER FABRIC across an interconnect: a listener only NACKs
+caches it discovered by beacon, so when the loss is UPSTREAM of beacon scope every
+reachable cache is missing exactly the frames requested and answers MISS. Deeper
+escalation cannot help — reach, not depth, is the limit. Measured on a 2-region
+lab before this was configured: **491 NACKs, 491 cache misses, zero retransmits**,
+while the origin region held complete copies and was never asked.
+
+**The fetch socket must be source-bound to the fabric address the firewall
+admits.** The client binds the resolved NACK address for this reason. If it
+instead uses a wildcard bind, a node that also holds a transit/interconnect
+address will source from THAT address, and the upstream's unicast reply — now
+addressed outside the allow-listed retry set — is dropped by the **upstream's**
+egress chain.
+
+**Diagnosing a failed fetch: read BOTH ends.** The downstream signature is a bare
+timeout (`bre_proxy_failed_total` == `bre_proxy_requests_total`) with nothing
+logged locally, while the upstream simultaneously reports a cache HIT, a response
+sent, and ZERO unicast retransmits. That combination means the reply was generated
+and then dropped — not that the frame was missing — and the error text
+(`sendto: operation not permitted`) exists only in the upstream's log.
+
 ### `-proxy-enabled` / `PROXY_ENABLED` (default: `false`)
 
 Master switch. When `true`, `-upstream-retry-endpoints` is required.
@@ -410,10 +432,24 @@ on listeners.
 
 ### `-beacon-tier` / `BEACON_TIER` (default: `0`)
 
-Tier level advertised in the ADVERT. Listeners sort endpoints by
-**(Tier ASC, Preference DESC)**; lower tier = higher priority. Use `0` for
-endpoints closest to the source (same site) and higher values for remotely
-reached fallbacks.
+Tier level advertised in the ADVERT. Per BRC-126 it means **AS hops from the
+transaction source**: lower = nearer the source = tried FIRST. Listeners sort by
+**(Tier ASC, Preference DESC)**. Use `0` for endpoints closest to the source (same
+AS as the ingress proxy) and higher values for remotely reached fallbacks. `0xFF`
+is RESERVED as the static-seed sentinel — do not advertise it.
+
+**Set this deliberately.** Leaving every endpoint at the default `0` makes the
+whole fleet claim source-adjacency, so `(Tier, Preference)` ties everywhere and —
+because the listener's registry sort is not stable — the escalation ORDER becomes
+arbitrary and unrepeatable between runs, which also invalidates before/after
+recovery comparisons.
+
+**Do not derive Tier from a topology fact.** "This fabric imports remote sources"
+is not a distance signal: interconnects are bidirectional, so every meshed fabric
+imports its peers and such a rule stamps the same tier on the receiver AND the
+true origin. With ingress possible in any region, no fabric-level fact fixes
+distance-to-source — which is why the spec makes Tier per-endpoint operator
+policy.
 
 ### `-beacon-preference` / `BEACON_PREFERENCE` (default: `128`)
 
@@ -454,9 +490,16 @@ incoming NACK datagram. This guarantees delivery to the specific listener withou
 relying on multicast fabric propagation. Can be enabled alongside multicast
 retransmit — both fire for the same NACK when both flags are set.
 
-**Collapsed PIM-SSM fabric** (e.g. a collapsed single-node fabric): set
-`BEACON_FLAGS_UNICAST=true` **and** `BEACON_FLAGS_MULTICAST=false`. Multicast
-re-injection cannot repair a *remote* receiver there — PIM-SSM RPF lets only the
+**Repair mode — prefer unicast-back generally, not just on a collapsed fabric.**
+Set `BEACON_FLAGS_UNICAST=true` **and** `BEACON_FLAGS_MULTICAST=false` as the
+default posture, for two reasons independent of topology: (1) only a
+unicast-flagged ACK makes a repair VERIFIABLE — a bare ACK lets the listener close
+the gap on trust, so a repair lost on the same degraded link is never retried and
+the loss goes unreported; (2) a multicast repair is delivered to every listener in
+the group, so members that lost nothing are metered for the bytes.
+
+One instance of (1) is a **collapsed PIM-SSM fabric**, where multicast
+re-injection cannot repair a *remote* receiver at all — PIM-SSM RPF lets only the
 source node inject into its own `(S,G)` tree — so unicast is the only working
 return channel. Pair this with **no `-bind-source`** so the cache holds its own
 source too (the origin becomes the last-resort repairer), and the consumer

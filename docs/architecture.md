@@ -353,6 +353,11 @@ socket source-bound to the advertised NACK address (so the requester's registry
 filter matches). It uses the source address from the incoming datagram. This
 guarantees delivery to the specific requester without relying on multicast
 fabric propagation, but does not benefit other listeners with the same gap.
+The counterweight is that the multicast path's group-wide delivery is also
+CHARGED as delivery to every member (including those that lost nothing), and its
+arrival cannot be confirmed by the requester — a multicast-only repair is
+acknowledged with a bare ACK, which the listener treats as success even if the
+retransmit is lost on the same path. Unicast is therefore the default posture.
 Unlike the multicast path it applies **no** cross-instance dedup — each
 requester needs its own copy.
 
