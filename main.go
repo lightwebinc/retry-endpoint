@@ -410,7 +410,11 @@ func run() error {
 			slog.Warn("proxy in-flight dedup disabled: no shared cache backend; sibling endpoints may each proxy the same gap (use -cache-backend redis|aerospike)")
 		}
 		proxyClient = proxy.New(proxy.Config{
-			Upstreams:    cfg.UpstreamRetryEndpoints,
+			Upstreams: cfg.UpstreamRetryEndpoints,
+			// Same address the NACK socket binds and the unicast retransmit socket
+			// sources from: the upstream must be able to reply to it, and fabric
+			// firewalls only admit the retry-endpoint address set.
+			SourceIP:     nackBindIP,
 			Timeout:      cfg.ProxyTimeout,
 			MaxEndpoints: cfg.ProxyMaxEndpoints,
 			DedupWindow:  cfg.ProxyDedupWindow,

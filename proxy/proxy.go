@@ -70,7 +70,19 @@ type TTLConfig struct {
 
 // Config holds the proxy client's dependencies and tuning.
 type Config struct {
-	Upstreams    []string // upstream NACK targets (host:port)
+	Upstreams []string // upstream NACK targets (host:port)
+	// SourceIP, when set, binds the fetch socket so the upstream addresses its
+	// unicast frame return to THIS node's fabric retry address instead of
+	// whatever source the kernel selects per-route.
+	//
+	// This is not cosmetic. Fabric firewalls admit the retry-endpoint address
+	// set; on a node that also holds a transit/interconnect address, the route to
+	// an upstream in another fabric selects that transit address, so the
+	// upstream's reply is addressed outside the permitted set and is dropped by
+	// the UPSTREAM's egress chain (EPERM). The symptom is maximally confusing:
+	// every fetch times out and is counted as a proxy failure, while the upstream
+	// simultaneously records a cache HIT and a response sent.
+	SourceIP     net.IP
 	Timeout      time.Duration
 	MaxEndpoints int // upstream endpoints tried per gap; <=0 = all
 	DedupWindow  time.Duration
@@ -220,9 +232,13 @@ func (c *Client) fetch(endpoint string, j job) ([]byte, bool) {
 		c.log.Warn("proxy: cannot resolve upstream", "endpoint", endpoint, "err", err)
 		return nil, false
 	}
-	conn, err := net.ListenPacket("udp6", "[::]:0")
+	laddr := "[::]:0"
+	if c.cfg.SourceIP != nil {
+		laddr = net.JoinHostPort(c.cfg.SourceIP.String(), "0")
+	}
+	conn, err := net.ListenPacket("udp6", laddr)
 	if err != nil {
-		c.log.Warn("proxy: listen failed", "err", err)
+		c.log.Warn("proxy: listen failed", "laddr", laddr, "err", err)
 		return nil, false
 	}
 	defer func() { _ = conn.Close() }()
