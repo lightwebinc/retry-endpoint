@@ -225,7 +225,7 @@ func Load() (*Config, error) {
 		"cache TTL for BEEF object frames (BRC-148, FrameVer V9)")
 	flag.BoolVar(&c.BEEFEnabled, "beef-enabled", envBool("BEEF_ENABLED", false),
 		"join and serve the BRC-148 BEEF plane band (0x1000 + 2^beef-shard-bits groups)")
-	beefBits := flag.Uint("beef-shard-bits", uint(envInt("BEEF_SHARD_BITS", 4)),
+	beefBits := flag.Uint("beef-shard-bits", uint(envInt("BEEF_SHARD_BITS", 0)),
 		"BRC-148 BEEF plane shard-bit width (0-12, 0 = single group); must match proxy")
 	flag.IntVar(&c.CacheMaxKeys, "cache-max-keys", envInt("CACHE_MAX_KEYS", 0),
 		"maximum number of keys in cache (0 = no limit)")
