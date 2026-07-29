@@ -141,7 +141,6 @@ func (r *Retransmitter) RetransmitUnicast(raw []byte, dst *net.UDPAddr) error {
 // frame's domain-tagged retransmit group from its TopicID. Call before Open.
 func (r *Retransmitter) SetBEEF(pe *shard.PlaneEngine) { r.beefEngine = pe }
 
-
 // targetGroup derives the retransmission destination for a cached frame,
 // re-computed from the frame's own fields per FrameVer:
 //   - V4/V6: GroupBlockBroadcast (0xFFFE)

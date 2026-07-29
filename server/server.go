@@ -67,14 +67,14 @@ type Server struct {
 	retransmit   Retransmitter
 	workers      int
 	debug        bool
-	suppressACK  bool          // if true, do not send ACK responses
-	suppressMISS bool          // if true, do not send MISS responses
-	throttleResp bool          // if true, answer honest-congestion throttles with a THROTTLED hint
-	shardEngine  *shard.Engine // for post-lookup group index derivation; nil = skip group limiter
-	beefEngine  *shard.PlaneEngine // nil = derive BEEF rate-limit group from offset 8 (stable fallback)
-	retransmitMC bool          // multicast retransmit on cache hit (default true)
-	retransmitUC bool          // unicast retransmit (frame back to requester) on cache hit
-	proxy        ProxyEnqueuer // nil = NACK proxying disabled
+	suppressACK  bool               // if true, do not send ACK responses
+	suppressMISS bool               // if true, do not send MISS responses
+	throttleResp bool               // if true, answer honest-congestion throttles with a THROTTLED hint
+	shardEngine  *shard.Engine      // for post-lookup group index derivation; nil = skip group limiter
+	beefEngine   *shard.PlaneEngine // nil = derive BEEF rate-limit group from offset 8 (stable fallback)
+	retransmitMC bool               // multicast retransmit on cache hit (default true)
+	retransmitUC bool               // unicast retransmit (frame back to requester) on cache hit
+	proxy        ProxyEnqueuer      // nil = NACK proxying disabled
 	log          *slog.Logger
 }
 
