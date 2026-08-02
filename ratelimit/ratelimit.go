@@ -1,8 +1,8 @@
 // Package ratelimit provides four-tier rate limiting for NACK requests:
 //
 //  1. Per-IP token bucket (overall flood protection).
-//  2. Per-(srcIP, HashKey) sliding window (per-flow NACK storm cap).
-//  3. Per-SeqNum sliding window (per-gap retry cap).
+//  2. Per-SeqNum sliding window (per-gap retry cap).
+//  3. Per-(srcIP, HashKey) sliding window (per-flow NACK storm cap).
 //  4. Per-(srcIP, groupIdx) token bucket (post-lookup retransmit bandwidth cap).
 //
 // Tiers 1-3 are pre-lookup (call Allow + AllowChain before cache access).
@@ -98,7 +98,7 @@ func (r *Limiter) Allow(srcIP net.IP, startSeq uint64) (bool, Level) {
 	return true, ""
 }
 
-// AllowChain checks the chain tier (pre-lookup, between IP and sequence).
+// AllowChain checks the chain tier (pre-lookup, after the IP and sequence tiers).
 // hashKey is the HashKey field from the NACK datagram. 0 means the frame was
 // not stamped by the proxy (unstamped); rate-limiting on HashKey=0 would
 // bucket all such unattributed gaps together and prematurely exhaust a shared

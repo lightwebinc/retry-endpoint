@@ -92,7 +92,7 @@ configured purely by aligning those with the bridge's egress space:
 | Upstream listener (bridge)       | Downstream retry-endpoint           | Downstream consumer  |
 | -------------------------------- | ----------------------------------- | -------------------- |
 | `-mc-egress-enabled=true`        | —                                   | —                    |
-| `-strip-header=false` (default)  | —                                   | —                    |
+| `-strip-header=false`            | —                                   | —                    |
 | `-mc-egress-scope` = X           | `-scope` = X                        | `-scope` = X         |
 | `-mc-egress-group-id` = G_d      | `-mc-group-id` = G_d                | `-mc-group-id` = G_d |
 | `-mc-egress-port` = P            | `-listen-port`=P, `-egress-port`=P  | `-listen-port` = P   |

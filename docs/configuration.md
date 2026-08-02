@@ -581,11 +581,17 @@ and a `bre_host_info` gauge.
 | Metric                                                           | Description                                                         |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `bre_frames_received_total`                                      | Frames received from multicast fabric                               |
+| `bre_frames_dropped_total{reason}`                               | Frames dropped, by reason                                           |
 | `bre_frames_cached_total`                                        | Frames successfully written to cache                                |
+| `bre_cache_size`                                                 | Current cache size (gauge)                                          |
+| `bre_cache_errors_total`                                         | Cache errors                                                        |
+| `bre_nack_requests_total`                                        | NACK requests received                                              |
 | `bre_cache_hits_total`                                           | NACK requests resolved from cache                                   |
 | `bre_cache_misses_total`                                         | NACK requests with no cached frame                                  |
 | `bre_retransmits_total`                                          | Frames sent to multicast egress                                     |
 | `bre_unicast_retransmits_total`                                  | Frames sent unicast back to the NACK requester                      |
+| `bre_responses_sent_total`                                       | ACK/MISS responses successfully written to the NACK socket          |
+| `bre_response_send_errors_total`                                 | ACK/MISS responses that failed to send (`WriteTo` error)            |
 | `bre_retransmit_dedup_total`                                     | Retransmits skipped by cross-instance dedup (requires `REDIS_ADDR`) |
 | `bre_rate_limit_drops_total{level=ip\|chain\|sequence\|group}`   | Requests dropped (or retransmit suppressed) by rate limiter tier    |
 | `bre_proxy_requests_total`                                       | Cross-domain proxy recovery jobs started                            |
@@ -593,6 +599,7 @@ and a `bre_host_info` gauge.
 | `bre_proxy_failed_total{reason}`                                 | Proxy jobs that found no frame upstream                             |
 | `bre_proxy_inflight_dedup_total`                                 | Proxy jobs skipped (sibling already claimed the gap)                |
 | `bre_proxy_queue_dropped_total`                                  | Proxy jobs dropped because the queue was full                       |
+| `bre_beacon_adverts_sent_total`                                  | ADVERT beacon datagrams sent to the discovery multicast group       |
 
 ---
 
@@ -665,7 +672,7 @@ Chart: [`lightwebinc/retry-endpoint-helm`](https://github.com/lightwebinc/retry-
 | Flag / Env | Default | Description |
 |------------|---------|-------------|
 | `-beef-enabled` / `BEEF_ENABLED` | `false` | Join the BEEF plane band (`0x1000 + 2^beef-shard-bits` groups) and cache V9 frames |
-| `-beef-shard-bits` / `BEEF_SHARD_BITS` | `4` | Plane width; must match the proxy (retransmit groups re-derive from the TopicID at this width) |
+| `-beef-shard-bits` / `BEEF_SHARD_BITS` | `0` | Plane width (`0` = single group); must match the proxy (retransmit groups re-derive from the TopicID at this width) |
 | `-cache-ttl-beef` / `CACHE_TTL_BEEF` | `60s` | V9 cache TTL (live-tail resend window); independent of the `CACHE_TTL` collapse |
 
 V9 frames cache under the standard HashKey ∥ SeqNum key; the retransmit

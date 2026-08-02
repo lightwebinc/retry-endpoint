@@ -7,7 +7,7 @@ import (
 
 // Regression: a node must never (S,G)-join its own source — the MLD state
 // installs an iif==oif mroute on a collapsed edge and originated frames loop
-// until hop-limit death (~60x amplification; lab-spine-ssm-geo/LATENCY-GEO.md).
+// until hop-limit death (~60x amplification, measured in a geo SSM lab).
 func TestExcludeOwnSource(t *testing.T) {
 	a := netip.MustParseAddr
 	cases := []struct {
