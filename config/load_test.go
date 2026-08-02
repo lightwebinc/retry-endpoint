@@ -94,6 +94,23 @@ func TestLoad_ShardBitsBounds(t *testing.T) {
 	}
 }
 
+func TestLoad_BeaconTierBounds(t *testing.T) {
+	// 255 is the sentinel a listener stamps on static seeds so they sort last;
+	// an endpoint advertising it would masquerade as a fallback.
+	for _, tier := range []string{"255", "256"} {
+		if _, err := loadWithArgs(t, withEgress(t, "-beacon-tier="+tier)...); err == nil {
+			t.Errorf("beacon-tier=%s should error", tier)
+		}
+	}
+	c, err := loadWithArgs(t, withEgress(t, "-beacon-tier=254")...)
+	if err != nil {
+		t.Fatalf("beacon-tier=254 should load: %v", err)
+	}
+	if c.BeaconTier != 254 {
+		t.Errorf("beacon-tier = %d, want 254", c.BeaconTier)
+	}
+}
+
 func TestLoad_CacheBackend(t *testing.T) {
 	if _, err := loadWithArgs(t, withEgress(t, "-cache-backend=bogus")...); err == nil {
 		t.Error("invalid cache-backend should error")

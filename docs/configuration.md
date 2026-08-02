@@ -435,8 +435,9 @@ on listeners.
 Tier level advertised in the ADVERT. Per BRC-126 it means **AS hops from the
 transaction source**: lower = nearer the source = tried FIRST. Listeners sort by
 **(Tier ASC, Preference DESC)**. Use `0` for endpoints closest to the source (same
-AS as the ingress proxy) and higher values for remotely reached fallbacks. `0xFF`
-is RESERVED as the static-seed sentinel — do not advertise it.
+AS as the ingress proxy) and higher values for remotely reached fallbacks. Valid
+range is `0`–`254`: `0xFF` is RESERVED as the static-seed sentinel and is
+rejected at config load.
 
 **Set this deliberately.** Leaving every endpoint at the default `0` makes the
 whole fleet claim source-adjacency, so `(Tier, Preference)` ties everywhere and —

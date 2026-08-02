@@ -551,8 +551,11 @@ func Load() (*Config, error) {
 	default:
 		return nil, fmt.Errorf("beacon-scope must be one of site|org|global|both|all, got %q", c.BeaconScope)
 	}
-	if c.BeaconTier > 255 {
-		return nil, fmt.Errorf("beacon-tier must fit in uint8, got %d", c.BeaconTier)
+	// 255 (0xFF) is the sentinel a listener assigns to statically configured
+	// endpoints so they sort last; advertising it would make this endpoint
+	// indistinguishable from a fallback seed.
+	if c.BeaconTier > 254 {
+		return nil, fmt.Errorf("beacon-tier must be in [0, 254] (255 is reserved for static seeds), got %d", c.BeaconTier)
 	}
 	if c.BeaconPreference > 255 {
 		return nil, fmt.Errorf("beacon-preference must fit in uint8, got %d", c.BeaconPreference)
