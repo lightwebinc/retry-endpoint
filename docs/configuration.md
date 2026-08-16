@@ -96,13 +96,12 @@ refresh failures.
 Txid prefix bit width used as the shard key. Must exactly match the proxy's
 `-shard-bits`. Determines how many multicast groups the endpoint joins (2ᴺ).
 
-| Bits | Groups                                                 |
-| ---- | ------------------------------------------------------ |
-| 1    | 2                                                      |
-| 2    | 4 (default)                                            |
-| 8    | 256                                                    |
-| 12   | 4 096                                                  |
-| 15   | 32 768 (max; top of 16-bit space reserved for control) |
+| Bits | Groups                                                                                           |
+| ---- | ------------------------------------------------------------------------------------------------ |
+| 1    | 2                                                                                                |
+| 2    | 4 (default)                                                                                      |
+| 8    | 256                                                                                              |
+| 12   | 4 096 (max; BRC-129 zones shard group indices to 0x0000–0x0FFF; upper band reserved for control) |
 
 ### `-subtree-data-enabled` / `SUBTREE_DATA_ENABLED` (default: `false`)
 

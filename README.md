@@ -115,13 +115,7 @@ environment variables / CLI flags.
 A Kubernetes Helm chart is published from a dedicated chart repository:
 
 - Repository: [`lightwebinc/retry-endpoint-helm`](https://github.com/lightwebinc/retry-endpoint-helm)
-- HTTPS:
-  ```
-  helm repo add bre https://lightwebinc.github.io/retry-endpoint-helm
-  helm install retry-node-1 bre/retry-endpoint \
-    --set config.nackAddr=2001:db8::24
-  ```
-- OCI: `helm install retry-node-1 oci://ghcr.io/lightwebinc/charts/retry-endpoint --version 0.4.0`
+- OCI (the only published form): `helm install retry-node-1 oci://ghcr.io/lightwebinc/charts/retry-endpoint --version 0.5.1`
 
 `config.nackAddr` is effectively required — the chart emits a `helm.sh/chart-warnings` annotation when empty. The chart does **not** bundle a Redis subchart; operators install Redis separately when `config.cacheBackend=redis`. See the chart README for the full reference.
 

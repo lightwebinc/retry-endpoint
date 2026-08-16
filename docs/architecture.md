@@ -220,7 +220,10 @@ receive the same multicast group.
 In addition to the shard groups, the ingress worker always joins `GroupBlockBroadcast`
 (`FF0X::B:FFFE`) to cache BRC-131 block control frames and BRC-134 anchor transaction
 frames (FrameVerV6). When `-subtree-data-enabled=true`, it also joins
-`GroupSubtreeDataAnnounce` (`FF0X::B:FFFB`) to cache BRC-132 subtree data frames. The cache
+`GroupSubtreeDataAnnounce` (`FF0X::B:FFFB`) to cache BRC-132 subtree data frames. When
+`-beef-enabled=true`, it additionally joins the BRC-148 BEEF plane band to cache V9 object
+frames. BRC-130 fragments (FrameVerV3) are cached individually — each fragment carries its
+own HashKey/SeqNum at the standard offsets — with TTLs per `OrigFrameVer`. The cache
 key is frame-version-agnostic: `HashKey (8B) ∥ SeqNum (8B)` → raw frame bytes regardless of
 frame type, so BRC-131, BRC-132, and BRC-134 frames are served on NACK request with the same
 lookup path as BRC-124/BRC-128 frames.
@@ -338,6 +341,11 @@ interface (set via `-egress-iface`). On a cache hit it:
    - V6 (BRC-134 anchor): retransmits to `GroupBlockBroadcast` (`FF0X::B:FFFE`)
    - V8 (BRC-142 bundle): reads the shard group index from the header at offset
      56:58 (a bundle has no TxID); member count is never parsed
+   - V9 (BRC-148 BEEF): derives the domain-tagged group from the TopicID at
+     offset 56:88 at the BEEF plane width (plane engine required; never from
+     offset 8 — the ContentID is not a shard key)
+   - V3 (BRC-130 fragment): routed per `OrigFrameVer` — the same group as the
+     original frame class
 2. Sends the raw frame bytes verbatim to the derived group address on each
    egress interface.
 
