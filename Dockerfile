@@ -6,7 +6,7 @@
 # NOTE: in production, NACK_ADDR (or --nack-addr) must be set to the
 # specific routable IPv6 advertised in beacons. See README.md.
 
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 
