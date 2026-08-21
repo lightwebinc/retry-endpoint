@@ -55,7 +55,7 @@ func TestAllCountersSafeToCall(t *testing.T) {
 	r.ResponseSendError("ack")
 	r.RateLimitDrop("ip")
 	r.FrameReceived()
-	r.FrameCached()
+	r.FrameCached("fd00:5::a8")
 	r.FrameDropped("decode")
 	r.BeaconAdvertSent()
 	r.WorkerReady()

@@ -149,7 +149,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 	buf := make([]byte, recvBufSize)
 	for {
-		n, _, err := unix.Recvfrom(fd, buf, 0)
+		n, from, err := unix.Recvfrom(fd, buf, 0)
 		if err != nil {
 			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
 				if ctx.Err() != nil {
@@ -170,30 +170,38 @@ func (w *Worker) Run(ctx context.Context) error {
 			continue
 		}
 		if n > 0 {
-			w.processFrame(buf[:n])
+			// The datagram's source address IS the fabric source of the frame
+			// (SSM: one (S,G) per publisher) — it labels the per-source cache
+			// counters so a retry starved of ONE source's frames is a zero
+			// rate, not an invisible absence.
+			src := ""
+			if sa, ok := from.(*unix.SockaddrInet6); ok {
+				src = netip.AddrFrom16(sa.Addr).String()
+			}
+			w.processFrame(buf[:n], src)
 		}
 	}
 }
 
-func (w *Worker) processFrame(raw []byte) {
+func (w *Worker) processFrame(raw []byte, src string) {
 	// BRC-131 block control frames (FrameVer 0x04) are handled separately
 	// because frame.Decode rejects V4 with ErrBadVer.
 	if frame.IsBlockFrame(raw) {
-		w.processBlockFrame(raw)
+		w.processBlockFrame(raw, src)
 		return
 	}
 
 	// BRC-132 subtree data frames (FrameVer 0x05) are handled separately
 	// because frame.Decode rejects V5 with ErrBadVer.
 	if frame.IsSubtreeDataFrame(raw) {
-		w.processSubtreeDataFrame(raw)
+		w.processSubtreeDataFrame(raw, src)
 		return
 	}
 
 	// BRC-134 anchor transaction frames (FrameVer 0x06) are handled
 	// separately because frame.Decode rejects V6 with ErrBadVer.
 	if frame.IsAnchorFrame(raw) {
-		w.processAnchorFrame(raw)
+		w.processAnchorFrame(raw, src)
 		return
 	}
 
@@ -201,7 +209,7 @@ func (w *Worker) processFrame(raw []byte) {
 	// frame.Decode rejects V8 with ErrBadVer. A bundle is cached opaquely by
 	// its (HashKey, SeqNum) flow key, exactly like a BRC-124 frame.
 	if frame.IsBundle(raw) {
-		w.processBundleFrame(raw)
+		w.processBundleFrame(raw, src)
 		return
 	}
 
@@ -209,7 +217,7 @@ func (w *Worker) processFrame(raw []byte) {
 	// because frame.Decode rejects V9 with ErrBadVer. Like every cached
 	// class, the flow key is (HashKey, SeqNum) at fixed offsets.
 	if frame.IsBEEFFrame(raw) {
-		w.processBEEFFrame(raw)
+		w.processBEEFFrame(raw, src)
 		return
 	}
 
@@ -218,7 +226,7 @@ func (w *Worker) processFrame(raw []byte) {
 	// per-fragment NACK recovery works exactly like whole frames. The TTL
 	// follows the original frame class (OrigFrameVer).
 	if frame.IsFragment(raw) {
-		w.processFragmentFrame(raw)
+		w.processFragmentFrame(raw, src)
 		return
 	}
 
@@ -254,7 +262,7 @@ func (w *Worker) processFrame(raw []byte) {
 	}
 
 	if w.rec != nil {
-		w.rec.FrameCached()
+		w.rec.FrameCached(src)
 	}
 
 	if w.debug {
@@ -270,7 +278,7 @@ func (w *Worker) processFrame(raw []byte) {
 // cached by their (HashKey, SeqNum) flow key with the BEEF TTL. The
 // retransmit path re-derives the domain-tagged group from the frame's
 // TopicID at offset 56 — never from offset 8, which carries the ContentID.
-func (w *Worker) processBEEFFrame(raw []byte) {
+func (w *Worker) processBEEFFrame(raw []byte, src string) {
 	bf, err := frame.DecodeBEEF(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -298,7 +306,7 @@ func (w *Worker) processBEEFFrame(raw []byte) {
 		return
 	}
 	if w.rec != nil {
-		w.rec.FrameCached()
+		w.rec.FrameCached(src)
 	}
 }
 
@@ -306,7 +314,7 @@ func (w *Worker) processBEEFFrame(raw []byte) {
 // (HashKey, SeqNum) flow key. The cache TTL follows the fragmented class
 // (OrigFrameVer); the retransmit path re-derives the group from the
 // fragment's own header fields per that class.
-func (w *Worker) processFragmentFrame(raw []byte) {
+func (w *Worker) processFragmentFrame(raw []byte, src string) {
 	ff, err := frame.DecodeFragment(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -345,7 +353,7 @@ func (w *Worker) processFragmentFrame(raw []byte) {
 		return
 	}
 	if w.rec != nil {
-		w.rec.FrameCached()
+		w.rec.FrameCached(src)
 	}
 }
 
@@ -353,7 +361,7 @@ func (w *Worker) processFragmentFrame(raw []byte) {
 // cached opaquely by its (HashKey, SeqNum) flow key — identical to a BRC-124
 // frame — and retransmitted whole on NACK; the retry endpoint never parses
 // members.
-func (w *Worker) processBundleFrame(raw []byte) {
+func (w *Worker) processBundleFrame(raw []byte, src string) {
 	b, err := bundle.Decode(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -385,7 +393,7 @@ func (w *Worker) processBundleFrame(raw []byte) {
 	}
 
 	if w.rec != nil {
-		w.rec.FrameCached()
+		w.rec.FrameCached(src)
 	}
 
 	if w.debug {
@@ -399,7 +407,7 @@ func (w *Worker) processBundleFrame(raw []byte) {
 
 // processBlockFrame handles BRC-131 block control frames (FrameVer 0x04).
 // Uses the same HashKey ∥ SeqNum cache key as regular frames.
-func (w *Worker) processBlockFrame(raw []byte) {
+func (w *Worker) processBlockFrame(raw []byte, src string) {
 	bf, err := frame.DecodeBlock(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -431,7 +439,7 @@ func (w *Worker) processBlockFrame(raw []byte) {
 	}
 
 	if w.rec != nil {
-		w.rec.FrameCached()
+		w.rec.FrameCached(src)
 	}
 
 	if w.debug {
@@ -446,7 +454,7 @@ func (w *Worker) processBlockFrame(raw []byte) {
 
 // processSubtreeDataFrame handles BRC-132 subtree data frames (FrameVer 0x05).
 // Uses the same HashKey ∥ SeqNum cache key as regular and block frames.
-func (w *Worker) processSubtreeDataFrame(raw []byte) {
+func (w *Worker) processSubtreeDataFrame(raw []byte, src string) {
 	sf, err := frame.DecodeSubtreeData(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -478,7 +486,7 @@ func (w *Worker) processSubtreeDataFrame(raw []byte) {
 	}
 
 	if w.rec != nil {
-		w.rec.FrameCached()
+		w.rec.FrameCached(src)
 	}
 
 	if w.debug {
@@ -493,7 +501,7 @@ func (w *Worker) processSubtreeDataFrame(raw []byte) {
 
 // processAnchorFrame handles BRC-134 anchor transaction frames (FrameVer 0x06).
 // Uses the same HashKey ∥ SeqNum cache key as other frame types.
-func (w *Worker) processAnchorFrame(raw []byte) {
+func (w *Worker) processAnchorFrame(raw []byte, src string) {
 	af, err := frame.DecodeAnchor(raw)
 	if err != nil {
 		if w.rec != nil {
@@ -525,7 +533,7 @@ func (w *Worker) processAnchorFrame(raw []byte) {
 	}
 
 	if w.rec != nil {
-		w.rec.FrameCached()
+		w.rec.FrameCached(src)
 	}
 
 	if w.debug {

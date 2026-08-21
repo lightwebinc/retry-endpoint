@@ -466,6 +466,20 @@ func run() error {
 			return fmt.Errorf("ssm bootstrap: %w", err)
 		}
 		ing.SetGroupSources(gs)
+		// Pre-create the per-source cache counters for every joined source
+		// (metrics.PreCreateSources contract); the roster already excludes
+		// this node's own source.
+		uniq := map[string]struct{}{}
+		for _, srcs := range gs {
+			for _, s := range srcs {
+				uniq[s.String()] = struct{}{}
+			}
+		}
+		pre := make([]string, 0, len(uniq))
+		for s := range uniq {
+			pre = append(pre, s)
+		}
+		rec.PreCreateSources(pre)
 	}
 
 	var wg sync.WaitGroup

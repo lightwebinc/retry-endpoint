@@ -68,6 +68,7 @@ type Recorder struct {
 	// Ingress metrics
 	framesReceived metric.Int64Counter
 	framesCached   metric.Int64Counter
+	cacheStored    metric.Int64Counter
 	framesDropped  metric.Int64Counter
 
 	// Beacon sender metrics
@@ -220,6 +221,10 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		metric.WithDescription("Multicast frames received")); err != nil {
 		return nil, err
 	}
+	if r.cacheStored, err = meter.Int64Counter("bre_cache_stored_total",
+		metric.WithDescription("Frames stored into the repair cache, by originating fabric source. Pre-created at 0 for every joined source so a starved (retry, source) pair reads as a zero rate, never a missing series.")); err != nil {
+		return nil, err
+	}
 	if r.framesCached, err = meter.Int64Counter("bre_frames_cached_total",
 		metric.WithDescription("Frames cached")); err != nil {
 		return nil, err
@@ -321,8 +326,28 @@ func (r *Recorder) FrameReceived() {
 	r.framesReceived.Add(context.Background(), 1)
 }
 
-func (r *Recorder) FrameCached() {
+// FrameCached counts a frame stored into the repair cache. source is the
+// frame's originating fabric source ("" when unknown) — the per-source series
+// is what tells a retry starved of ONE source's frames apart from the healthy
+// own-source exclusion (which never has a series at all).
+func (r *Recorder) FrameCached(source string) {
 	r.framesCached.Add(context.Background(), 1)
+	r.cacheStored.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("source", source),
+	))
+}
+
+// PreCreateSources publishes a zero for every source this retry joins, so
+// "never stored anything from S" exists as a zero-rate series instead of an
+// absent one (the RetryCacheSourceStarved contract). The join roster already
+// excludes this node's own source, so the structural own-source pair never
+// gets a series and can never fire.
+func (r *Recorder) PreCreateSources(sources []string) {
+	for _, s := range sources {
+		r.cacheStored.Add(context.Background(), 0, metric.WithAttributes(
+			attribute.String("source", s),
+		))
+	}
 }
 
 func (r *Recorder) FrameDropped(reason string) {
