@@ -252,6 +252,11 @@ func run() error {
 	rec.SetHostInfo(inv)
 	slog.Info("host.inventory", "inventory", inv)
 
+	// Publish this node's own source so the starvation rule can subtract the
+	// (site, own source) pair, which excludeOwnSource makes structurally
+	// uncacheable. No-op when unset.
+	rec.SetOwnSource(cfg.BindSource)
+
 	// Opt-in distributed tracing (no-op unless -trace-sampling > 0 with an OTLP
 	// endpoint). Control-plane only (NACK -> retransmit); not the cache hot path.
 	_, traceShutdown, terr := tracing.Init(context.Background(), tracing.Options{

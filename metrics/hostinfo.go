@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"log/slog"
+	"net/netip"
 	"strconv"
 
 	"github.com/lightwebinc/shard-common/hostinfo"
@@ -46,4 +47,34 @@ func (r *Recorder) SetHostInfo(inv hostinfo.Inventory) {
 		speed,
 		inv.Version,
 	).Set(1)
+}
+
+// SetOwnSource publishes bre_own_source_info (value 1) carrying this node's
+// own fabric source address. A node never joins its own source — see
+// excludeOwnSource — so it structurally cannot cache its own frames, and the
+// (site, source) pair naming itself must never be read as starvation.
+//
+// The pair cannot simply be assumed absent: [Recorder.PreCreateSources] skips
+// it, but [Recorder.FrameCached] creates the series on the data path with no
+// roster check, so a single own-source frame leaked in by a co-located
+// listener's wildcard socket (IPV6_MULTICAST_ALL is on by default) births the
+// pair permanently at a frozen count. This gauge is what lets the
+// RetryCacheSourceStarved rule subtract that pair — and only that pair — with
+// `unless on(site, source)`. Best-effort; registration errors are ignored.
+func (r *Recorder) SetOwnSource(src string) {
+	// Canonicalise here rather than at the call site: the data path labels
+	// bre_cache_stored_total with netip.Addr.String(), and the two spellings
+	// must be byte-identical or the rule's join silently matches nothing.
+	addr, err := netip.ParseAddr(src)
+	if err != nil {
+		return
+	}
+	g := promclient.NewGaugeVec(promclient.GaugeOpts{
+		Name: "bre_own_source_info",
+		Help: "This node's own fabric source address (value always 1); it never joins this source, so it cannot cache its own frames.",
+	}, []string{"source"})
+	if err := r.promOtel.Register(g); err != nil {
+		return
+	}
+	g.WithLabelValues(addr.String()).Set(1)
 }

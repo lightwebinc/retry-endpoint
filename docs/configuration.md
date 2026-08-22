@@ -583,6 +583,8 @@ and a `bre_host_info` gauge.
 | `bre_frames_received_total`                                      | Frames received from multicast fabric                               |
 | `bre_frames_dropped_total{reason}`                               | Frames dropped, by reason                                           |
 | `bre_frames_cached_total`                                        | Frames successfully written to cache                                |
+| `bre_cache_stored_total{source}`                                 | Frames cached, by originating fabric source (see note below)        |
+| `bre_own_source_info{source}`                                    | This node's own source address (always 1); it never joins this one  |
 | `bre_cache_size`                                                 | Current cache size (gauge)                                          |
 | `bre_cache_errors_total`                                         | Cache errors                                                        |
 | `bre_nack_requests_total`                                        | NACK requests received                                              |
@@ -600,6 +602,27 @@ and a `bre_host_info` gauge.
 | `bre_proxy_inflight_dedup_total`                                 | Proxy jobs skipped (sibling already claimed the gap)                |
 | `bre_proxy_queue_dropped_total`                                  | Proxy jobs dropped because the queue was full                       |
 | `bre_beacon_adverts_sent_total`                                  | ADVERT beacon datagrams sent to the discovery multicast group       |
+
+### Per-source cache accounting
+
+`bre_cache_stored_total` is pre-created at `0` for every source this endpoint
+joins, so a retry starved of one source reads as a zero *rate* rather than a
+missing series — that is what lets an alert tell "receiving nothing from S"
+apart from "never configured for S".
+
+The roster it is pre-created from excludes this node's **own** source: joining
+your own source installs an `iif == oif` mroute and every originated frame
+re-enters the forwarding cache until hop-limit death (~60x egress
+amplification). The endpoint therefore cannot cache its own frames at all.
+
+That exclusion does **not** guarantee the own-source series is absent. Frames
+are labelled on the data path with no roster check, so a single own-source
+frame — e.g. side-fed by a co-located listener sharing the wildcard `*:9001`
+socket, since `IPV6_MULTICAST_ALL` is on by default — creates the pair at a
+count that then never moves. By rate alone that is indistinguishable from real
+starvation. `bre_own_source_info` publishes the address so a consumer can
+subtract exactly that pair (`unless on(site, source)`) without blinding itself
+to genuine starvation on any other source.
 
 ---
 

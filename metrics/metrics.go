@@ -340,8 +340,15 @@ func (r *Recorder) FrameCached(source string) {
 // PreCreateSources publishes a zero for every source this retry joins, so
 // "never stored anything from S" exists as a zero-rate series instead of an
 // absent one (the RetryCacheSourceStarved contract). The join roster already
-// excludes this node's own source, so the structural own-source pair never
-// gets a series and can never fire.
+// excludes this node's own source, so this call never births the own-source
+// pair.
+//
+// That is NOT the same as the pair being absent: [Recorder.FrameCached]
+// creates a series on the data path with no roster check, so one own-source
+// frame leaked in by a co-located listener's wildcard socket materialises
+// the pair at a count that then never moves -- indistinguishable, by rate
+// alone, from real starvation. [Recorder.SetOwnSource] publishes the address
+// so the alert can subtract exactly that pair.
 func (r *Recorder) PreCreateSources(sources []string) {
 	for _, s := range sources {
 		r.cacheStored.Add(context.Background(), 0, metric.WithAttributes(
