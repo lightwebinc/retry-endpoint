@@ -344,11 +344,12 @@ func (r *Recorder) FrameCached(source string) {
 // pair.
 //
 // That is NOT the same as the pair being absent: [Recorder.FrameCached]
-// creates a series on the data path with no roster check, so one own-source
-// frame leaked in by a co-located listener's wildcard socket materialises
-// the pair at a count that then never moves -- indistinguishable, by rate
-// alone, from real starvation. [Recorder.SetOwnSource] publishes the address
-// so the alert can subtract exactly that pair.
+// creates a series on the data path with no roster check, so one leaked
+// own-source frame materialises the pair at a count that then never moves --
+// indistinguishable, by rate alone, from real starvation. The ingress socket
+// disables IPV6_MULTICAST_ALL to close the leak path that produced this, and
+// [Recorder.SetOwnSource] publishes the address so the alert can subtract
+// exactly that pair even where the sockopt is unavailable.
 func (r *Recorder) PreCreateSources(sources []string) {
 	for _, s := range sources {
 		r.cacheStored.Add(context.Background(), 0, metric.WithAttributes(

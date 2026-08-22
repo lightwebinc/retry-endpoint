@@ -616,13 +616,15 @@ re-enters the forwarding cache until hop-limit death (~60x egress
 amplification). The endpoint therefore cannot cache its own frames at all.
 
 That exclusion does **not** guarantee the own-source series is absent. Frames
-are labelled on the data path with no roster check, so a single own-source
-frame — e.g. side-fed by a co-located listener sharing the wildcard `*:9001`
-socket, since `IPV6_MULTICAST_ALL` is on by default — creates the pair at a
-count that then never moves. By rate alone that is indistinguishable from real
-starvation. `bre_own_source_info` publishes the address so a consumer can
-subtract exactly that pair (`unless on(site, source)`) without blinding itself
-to genuine starvation on any other source.
+are labelled on the data path with no roster check, so a single leaked
+own-source frame creates the pair at a count that then never moves. By rate
+alone that is indistinguishable from real starvation. The ingress socket
+disables `IPV6_MULTICAST_ALL` (the kernel default delivers every group joined
+anywhere on the host to a wildcard-bound socket, so a co-located listener's
+joins used to side-feed this cache), which closes the known leak path;
+`bre_own_source_info` publishes the address so a consumer can subtract exactly
+that pair (`unless on(site, source)`) even on a binary or kernel without the
+sockopt, without blinding itself to genuine starvation on any other source.
 
 ---
 
