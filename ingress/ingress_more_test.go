@@ -32,7 +32,7 @@ func (e *errCache) Store(_, _ []byte, _ time.Duration) error {
 func TestProcessFrame_PrimaryStoreError(t *testing.T) {
 	w := New(&net.Interface{Name: "lo"}, 0, nil, &errCache{}, nil, TTLConfig{Tx: time.Minute, Block: time.Minute, Subtree: time.Minute, Anchor: time.Minute}, false)
 	raw := buildRaw(t, 0x1111111111111111, 0x22, nil)
-	w.processFrame(raw) // must not panic; just logs
+	w.processFrame(raw, "") // must not panic; just logs
 }
 
 func TestRun_CtxCancelExits(t *testing.T) {

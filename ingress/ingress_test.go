@@ -86,7 +86,7 @@ func TestProcessFrame_SingleIndex(t *testing.T) {
 	seqNum := uint64(0x1122334455667788)
 	raw := buildRaw(t, hashKey, seqNum, []byte("tx-payload"))
 
-	w.processFrame(raw)
+	w.processFrame(raw, "")
 
 	if mc.storeCount() != 1 {
 		t.Fatalf("expected 1 Store call, got %d", mc.storeCount())
@@ -115,7 +115,7 @@ func TestProcessFrame_ZeroSeqNum_Skip(t *testing.T) {
 	w := newTestWorker(mc)
 
 	raw := buildRaw(t, 0x1234, 0, []byte("payload"))
-	w.processFrame(raw)
+	w.processFrame(raw, "")
 
 	if mc.storeCount() != 0 {
 		t.Errorf("expected 0 Store calls for SeqNum=0, got %d", mc.storeCount())
@@ -128,7 +128,7 @@ func TestProcessFrame_ZeroHashKey_Stored(t *testing.T) {
 
 	seqNum := uint64(0xFFEEDDCCBBAA9988)
 	raw := buildRaw(t, 0, seqNum, []byte("first-in-flow"))
-	w.processFrame(raw)
+	w.processFrame(raw, "")
 
 	if mc.storeCount() != 1 {
 		t.Fatalf("expected 1 Store call, got %d", mc.storeCount())
@@ -143,7 +143,7 @@ func TestProcessFrame_DecodeError(t *testing.T) {
 	mc := &mockCache{}
 	w := newTestWorker(mc)
 
-	w.processFrame([]byte{0xFF, 0xFF}) // too short, bad magic
+	w.processFrame([]byte{0xFF, 0xFF}, "") // too short, bad magic
 	if mc.storeCount() != 0 {
 		t.Errorf("expected 0 Store calls for corrupt input, got %d", mc.storeCount())
 	}
@@ -155,7 +155,7 @@ func TestProcessFrame_TTLPropagated(t *testing.T) {
 	w.ttls.Tx = 42 * time.Second
 
 	raw := buildRaw(t, 0x1111111111111111, 0x22, nil)
-	w.processFrame(raw)
+	w.processFrame(raw, "")
 
 	if mc.storeCount() < 1 {
 		t.Fatal("expected at least 1 Store call")
@@ -209,7 +209,7 @@ func TestProcessFrame_PerVersionTTL(t *testing.T) {
 			if tc.ver == frame.FrameVerV4 || tc.ver == frame.FrameVerV5 {
 				raw[7] = 0x01
 			}
-			w.processFrame(raw)
+			w.processFrame(raw, "")
 
 			if mc.storeCount() != 1 {
 				t.Fatalf("expected 1 Store call, got %d", mc.storeCount())

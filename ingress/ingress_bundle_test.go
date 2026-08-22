@@ -25,7 +25,7 @@ func TestProcessBundleFrame_CachedByFlowKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w.processFrame(raw) // dispatches to processBundleFrame
+	w.processFrame(raw, "") // dispatches to processBundleFrame
 
 	if mc.storeCount() != 1 {
 		t.Fatalf("expected 1 Store, got %d", mc.storeCount())
@@ -48,7 +48,7 @@ func TestProcessBundleFrame_ZeroSeqNum_Skip(t *testing.T) {
 
 	b := &bundle.Bundle{HashKey: 0x1234, SeqNum: 0, Members: []bundle.Member{{Tx: []byte("x")}}}
 	raw, _ := b.Encode()
-	w.processFrame(raw)
+	w.processFrame(raw, "")
 
 	if mc.storeCount() != 0 {
 		t.Fatalf("zero-seqnum bundle must not be cached, got %d", mc.storeCount())

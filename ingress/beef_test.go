@@ -37,7 +37,7 @@ func TestProcessBEEFFrame_CachesUnderFlowKey(t *testing.T) {
 	w := newBEEFTestWorker(mc)
 
 	raw := beefTestRaw(t, 0xDEADBEEFCAFEBABE, 7)
-	w.processFrame(raw)
+	w.processFrame(raw, "")
 
 	if len(mc.stores) != 1 {
 		t.Fatalf("stored %d entries, want 1", len(mc.stores))
@@ -59,7 +59,7 @@ func TestProcessBEEFFrame_CachesUnderFlowKey(t *testing.T) {
 	// Unstamped (SeqNum 0) is never cached.
 	mc2 := &mockCache{}
 	w2 := newBEEFTestWorker(mc2)
-	w2.processFrame(beefTestRaw(t, 1, 0))
+	w2.processFrame(beefTestRaw(t, 1, 0), "")
 	if len(mc2.stores) != 0 {
 		t.Fatal("unstamped V9 frame was cached")
 	}
@@ -73,7 +73,7 @@ func TestProcessFrame_V9NotDroppedAsDecodeError(t *testing.T) {
 	}
 	mc := &mockCache{}
 	w := newBEEFTestWorker(mc)
-	w.processFrame(beefTestRaw(t, 1, 1))
+	w.processFrame(beefTestRaw(t, 1, 1), "")
 	if len(mc.stores) != 1 {
 		t.Fatal("V9 frame fell through to decode_error path")
 	}
