@@ -561,23 +561,9 @@ func (w *Worker) openRawSocket() (int, error) {
 		return -1, fmt.Errorf("SO_REUSEADDR: %w", err)
 	}
 	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, socketRecvBuf)
-	// IPV6_MULTICAST_ALL defaults to 1, which delivers every group joined ANYWHERE
-	// on the host to this wildcard-bound socket — including groups this process
-	// never joined. On a collapsed node the co-resident listener's joins therefore
-	// side-feed this cache, which makes coverage unauditable in both directions: a
-	// retry reads healthy on a band it never joined (masking real misconfiguration
-	// — this is what made an edge look fine while a listener-less spine starved),
-	// and own-source frames the join roster deliberately excludes still arrive and
-	// create a per-source series that can never advance.
-	//
-	// Turning it off makes what this cache holds equal what it declared. Verified
-	// safe rather than assumed: on testnet the side-fed edge and the listener-less
-	// spine cached byte-identical totals, so it was contributing no coverage — the
-	// only band received-but-not-joined is 0xFFFC, BRC-127 group announces, which
-	// are TTL-refreshed soft state that self-heals and is deliberately not a
-	// NACK-repaired flow. Best-effort: an old kernel without the option keeps the
-	// previous permissive behaviour rather than failing the socket.
-	_ = unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_MULTICAST_ALL, 0)
+	// Scope this socket to the groups it actually joined. Linux-only knob; on other
+	// platforms the default behaviour already matches. See mcastall_linux.go.
+	disableMulticastAll(fd)
 	sa := &unix.SockaddrInet6{Port: w.port}
 	if err := unix.Bind(fd, sa); err != nil {
 		_ = unix.Close(fd)
