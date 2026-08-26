@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 #
 # Canonical multi-stage Dockerfile for retry-endpoint.
 # Final image: distroless/static:nonroot.
@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags "-s -w -X github.com/lightwebinc/retry-endpoint/metrics.Version=${VERSION}" \
       -o /out/retry-endpoint .
 
-FROM gcr.io/distroless/static:nonroot
+FROM gcr.io/distroless/static:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
 USER nonroot:nonroot
 COPY --from=builder /out/retry-endpoint /usr/local/bin/retry-endpoint
 ENTRYPOINT ["/usr/local/bin/retry-endpoint"]
