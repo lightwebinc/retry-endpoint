@@ -515,12 +515,21 @@ func run() error {
 		}()
 	}
 
-	// Start ingress worker.
+	// Start ingress worker. Its death is fatal: without ingress the cache
+	// never fills and every NACK answered from here is a miss, yet the
+	// metrics/NACK/beacon goroutines would keep the process looking healthy.
+	// Surface it as a non-zero exit so the supervisor restarts us and the
+	// failure is visible where operators look.
+	fatalCh := make(chan error, 1)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := ing.Run(ctx); err != nil {
+		if err := ing.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("ingress exited with error", "err", err)
+			select {
+			case fatalCh <- fmt.Errorf("ingress: %w", err):
+			default:
+			}
 		}
 	}()
 
@@ -587,11 +596,16 @@ func run() error {
 		}()
 	}
 
-	// Wait for signal.
+	// Wait for a signal or a fatal subsystem error.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-	slog.Info("shutdown signal received", "signal", sig)
+	var fatalErr error
+	select {
+	case sig := <-sigCh:
+		slog.Info("shutdown signal received", "signal", sig)
+	case fatalErr = <-fatalCh:
+		slog.Error("fatal subsystem error, shutting down", "err", fatalErr)
+	}
 
 	if cfg.DrainTimeout > 0 {
 		rec.SetDraining()
@@ -608,7 +622,7 @@ func run() error {
 	rec.Shutdown(ctx2)
 
 	slog.Info("shutdown complete")
-	return nil
+	return fatalErr
 }
 
 func buildGroups(cfg *config.Config, engine *shard.Engine) ([]*net.UDPAddr, error) {
