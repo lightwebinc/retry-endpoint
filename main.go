@@ -436,6 +436,11 @@ func run() error {
 				BEEF:    cfg.CacheTTLBEEF,
 			},
 			Rec: rec,
+			// Same modes the direct cache-hit path honours. Before this the
+			// recovery path multicast unconditionally, regardless of the beacon
+			// flags, and a requester on another node never got its frame.
+			Multicast: cfg.BeaconFlagsMulticast,
+			Unicast:   cfg.BeaconFlagsUnicast,
 		})
 		srv.SetProxy(proxyClient)
 	}

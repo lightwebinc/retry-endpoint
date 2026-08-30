@@ -56,6 +56,7 @@ type Deduper interface {
 // Retransmitter multicasts a recovered frame into the downstream domain.
 type Retransmitter interface {
 	Retransmit(raw []byte, txID [32]byte) error
+	RetransmitUnicast(raw []byte, dst *net.UDPAddr) error
 }
 
 // TTLConfig mirrors the per-FrameVer cache TTLs used by the ingress worker so
@@ -93,12 +94,27 @@ type Config struct {
 	Retrans      Retransmitter
 	TTLs         TTLConfig
 	Rec          *metrics.Recorder
+	// Multicast / Unicast select how a RECOVERED frame is delivered, mirroring
+	// the server's retransmit modes (the advertised beacon flags). The recovery
+	// path used to multicast unconditionally, which is the wrong shape for a
+	// short-lived fragmented flow: every listener on the segment receives frames
+	// it did not ask for, out of order, under this node's source address, and
+	// an arrival-order gap tracker reads each one as evidence of loss. Unicast
+	// delivers the frame to the listener that actually asked, which is also the
+	// only way a requester on ANOTHER node ever receives a proxied recovery —
+	// the multicast egress is link-scoped and never leaves this node.
+	Multicast bool
+	Unicast   bool
 }
 
 type job struct {
 	hashKey uint64
 	seq     uint64
 	subtree [32]byte
+	// requester is the listener whose NACK missed the local cache and started
+	// this recovery. nil when unknown; a recovered frame is then cache-warm only
+	// unless multicast retransmit is on.
+	requester *net.UDPAddr
 }
 
 // Client recovers missed frames from upstream retry-endpoints.
@@ -135,9 +151,9 @@ func New(cfg Config) *Client {
 
 // Enqueue submits a recovery job for the (hashKey, seq) gap. Non-blocking: if
 // the queue is full the job is dropped and counted. Returns false on drop.
-func (c *Client) Enqueue(hashKey, seq uint64, subtree [32]byte) bool {
+func (c *Client) Enqueue(hashKey, seq uint64, subtree [32]byte, requester *net.UDPAddr) bool {
 	select {
-	case c.queue <- job{hashKey: hashKey, seq: seq, subtree: subtree}:
+	case c.queue <- job{hashKey: hashKey, seq: seq, subtree: subtree, requester: requester}:
 		return true
 	default:
 		if c.cfg.Rec != nil {
@@ -169,7 +185,9 @@ func (c *Client) Start(ctx context.Context) {
 }
 
 // recover claims the gap, fetches the frame from upstream, re-caches it, and
-// multicast-retransmits it into the downstream domain.
+// delivers it the way the retransmit modes say: unicast to the requester,
+// multicast into the downstream domain, both, or (neither mode on, or no
+// requester known) cache-warm only, so the requester's next NACK hits.
 func (c *Client) recover(ctx context.Context, j job) {
 	if c.cfg.Rec != nil {
 		c.cfg.Rec.ProxyRequest()
@@ -205,10 +223,21 @@ func (c *Client) recover(ctx context.Context, j job) {
 		if err := c.store(raw); err != nil {
 			c.log.Warn("proxy re-cache error", "err", err)
 		}
-		var txID [32]byte
-		copy(txID[:], raw[8:40])
-		if err := c.cfg.Retrans.Retransmit(raw, txID); err != nil {
-			c.log.Warn("proxy retransmit error", "err", err)
+		if c.cfg.Multicast {
+			var txID [32]byte
+			copy(txID[:], raw[8:40])
+			if err := c.cfg.Retrans.Retransmit(raw, txID); err != nil {
+				c.log.Warn("proxy retransmit error", "err", err)
+			} else if c.cfg.Rec != nil {
+				c.cfg.Rec.Retransmit()
+			}
+		}
+		if c.cfg.Unicast && j.requester != nil {
+			if err := c.cfg.Retrans.RetransmitUnicast(raw, j.requester); err != nil {
+				c.log.Warn("proxy unicast retransmit error", "err", err, "dst", j.requester.String())
+			} else if c.cfg.Rec != nil {
+				c.cfg.Rec.UnicastRetransmit()
+			}
 		}
 		if c.cfg.Rec != nil {
 			c.cfg.Rec.ProxyRecovered()

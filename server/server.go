@@ -87,7 +87,7 @@ type Retransmitter interface {
 // ProxyEnqueuer submits a cross-domain recovery job on a cache miss.
 // *proxy.Client satisfies it.
 type ProxyEnqueuer interface {
-	Enqueue(hashKey, seq uint64, subtree [32]byte) bool
+	Enqueue(hashKey, seq uint64, subtree [32]byte, requester *net.UDPAddr) bool
 }
 
 // New constructs a Server.
@@ -352,7 +352,7 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		// Cross-domain recovery: enqueue an async upstream fetch (cache-warm).
 		// Never re-proxy an already-proxied request (one-hop bound).
 		if s.proxy != nil && !proxied {
-			s.proxy.Enqueue(hashKey, startSeq, subtreeID)
+			s.proxy.Enqueue(hashKey, startSeq, subtreeID, src)
 		}
 		return
 	}

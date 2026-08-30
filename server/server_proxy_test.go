@@ -19,7 +19,7 @@ type enqueueCall struct {
 	subtree [32]byte
 }
 
-func (m *mockEnqueuer) Enqueue(hashKey, seq uint64, subtree [32]byte) bool {
+func (m *mockEnqueuer) Enqueue(hashKey, seq uint64, subtree [32]byte, requester *net.UDPAddr) bool {
 	m.mu.Lock()
 	m.calls = append(m.calls, enqueueCall{hashKey, seq, subtree})
 	m.mu.Unlock()

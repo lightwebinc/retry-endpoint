@@ -34,8 +34,9 @@ func (c *fakeCache) count() int {
 }
 
 type fakeRetrans struct {
-	mu     sync.Mutex
-	frames [][]byte
+	mu      sync.Mutex
+	frames  [][]byte
+	unicast []string
 }
 
 func (r *fakeRetrans) Retransmit(raw []byte, _ [32]byte) error {
@@ -43,6 +44,25 @@ func (r *fakeRetrans) Retransmit(raw []byte, _ [32]byte) error {
 	r.frames = append(r.frames, append([]byte{}, raw...))
 	r.mu.Unlock()
 	return nil
+}
+
+func (r *fakeRetrans) RetransmitUnicast(raw []byte, dst *net.UDPAddr) error {
+	r.mu.Lock()
+	r.unicast = append(r.unicast, dst.String())
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *fakeRetrans) unicastDsts() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string{}, r.unicast...)
+}
+
+func (r *fakeRetrans) unicastCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.unicast)
 }
 
 func (r *fakeRetrans) count() int {
@@ -155,6 +175,7 @@ func TestRecover_Serve(t *testing.T) {
 		Upstreams: []string{up.addr()},
 		Cache:     fc,
 		Retrans:   frt,
+		Multicast: true,
 	})
 
 	c.recover(context.Background(), job{hashKey: 0x1122, seq: 7})
@@ -186,6 +207,7 @@ func TestRecover_MissThenExhausted(t *testing.T) {
 		Upstreams: []string{up.addr()},
 		Cache:     fc,
 		Retrans:   frt,
+		Multicast: true,
 	})
 
 	c.recover(context.Background(), job{hashKey: 1, seq: 1})
@@ -205,6 +227,7 @@ func TestRecover_Timeout(t *testing.T) {
 		Upstreams: []string{up.addr()},
 		Cache:     fc,
 		Retrans:   frt,
+		Multicast: true,
 		Timeout:   150 * time.Millisecond,
 	})
 
@@ -230,6 +253,7 @@ func TestRecover_InflightDedup(t *testing.T) {
 		Upstreams:   []string{up.addr()},
 		Cache:       fc,
 		Retrans:     frt,
+		Multicast:   true,
 		Dedup:       dd,
 		DedupWindow: time.Minute,
 	})
@@ -253,10 +277,89 @@ func TestEnqueue_DropsWhenFull(t *testing.T) {
 		Workers:    1,
 	})
 	// Fill the queue without starting workers.
-	if !c.Enqueue(1, 1, [32]byte{}) {
+	if !c.Enqueue(1, 1, [32]byte{}, nil) {
 		t.Fatal("first enqueue should succeed")
 	}
-	if c.Enqueue(2, 2, [32]byte{}) {
+	if c.Enqueue(2, 2, [32]byte{}, nil) {
 		t.Error("second enqueue should drop (queue full)")
+	}
+}
+
+// A recovered frame goes to the listener that asked for it, and only there,
+// when the modes say unicast: no multicast into the segment (that is what put
+// unsolicited, out-of-order frames in front of every local listener under this
+// node's source address), and the requester need not be on this node.
+func TestRecover_UnicastToRequester(t *testing.T) {
+	fr := makeFrame(0x3344, 9)
+	up := startUpstream(t, "serve", fr)
+	defer up.close()
+
+	fc := newFakeCache()
+	frt := &fakeRetrans{}
+	c := newTestClient(Config{
+		Upstreams: []string{up.addr()},
+		Cache:     fc,
+		Retrans:   frt,
+		Unicast:   true,
+	})
+	req := &net.UDPAddr{IP: net.ParseIP("2001:db8::9"), Port: 9001}
+	c.recover(context.Background(), job{hashKey: 0x3344, seq: 9, requester: req})
+
+	if fc.count() != 1 {
+		t.Errorf("re-cache count = %d, want 1", fc.count())
+	}
+	if frt.count() != 0 {
+		t.Errorf("multicast retransmits = %d, want 0 with multicast mode off", frt.count())
+	}
+	if got := frt.unicastDsts(); len(got) != 1 || got[0] != req.String() {
+		t.Fatalf("unicast dsts = %v, want exactly [%s]", got, req.String())
+	}
+}
+
+// No requester and no multicast mode: the recovery is cache-warm only, so the
+// requester's next NACK hits locally. Nothing is put on the wire.
+func TestRecover_NoRequester_CacheWarmOnly(t *testing.T) {
+	fr := makeFrame(0x5566, 3)
+	up := startUpstream(t, "serve", fr)
+	defer up.close()
+
+	fc := newFakeCache()
+	frt := &fakeRetrans{}
+	c := newTestClient(Config{
+		Upstreams: []string{up.addr()},
+		Cache:     fc,
+		Retrans:   frt,
+		Unicast:   true,
+	})
+	c.recover(context.Background(), job{hashKey: 0x5566, seq: 3})
+
+	if fc.count() != 1 {
+		t.Errorf("re-cache count = %d, want 1", fc.count())
+	}
+	if frt.count() != 0 || frt.unicastCount() != 0 {
+		t.Errorf("sends = %d multicast / %d unicast, want 0 / 0", frt.count(), frt.unicastCount())
+	}
+}
+
+// Both modes on: both deliveries happen (the operator asked for both).
+func TestRecover_BothModes(t *testing.T) {
+	fr := makeFrame(0x7788, 5)
+	up := startUpstream(t, "serve", fr)
+	defer up.close()
+
+	fc := newFakeCache()
+	frt := &fakeRetrans{}
+	c := newTestClient(Config{
+		Upstreams: []string{up.addr()},
+		Cache:     fc,
+		Retrans:   frt,
+		Multicast: true,
+		Unicast:   true,
+	})
+	req := &net.UDPAddr{IP: net.ParseIP("2001:db8::a"), Port: 9001}
+	c.recover(context.Background(), job{hashKey: 0x7788, seq: 5, requester: req})
+
+	if frt.count() != 1 || frt.unicastCount() != 1 {
+		t.Errorf("sends = %d multicast / %d unicast, want 1 / 1", frt.count(), frt.unicastCount())
 	}
 }
