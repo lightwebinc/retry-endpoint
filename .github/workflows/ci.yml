@@ -33,3 +33,54 @@ jobs:
         env:
           GOWORK: "off"
         run: make ci
+
+  # freebsd/amd64 is a real deployment target (the FreeBSD spines/edges) and this
+  # repo carries a GOOS split — ingress/mcastall_linux.go vs
+  # ingress/mcastall_other.go — that NOTHING else in CI compiles. The Dagger
+  # pipeline builds linux only, so the non-linux half rots unnoticed.
+  #
+  # A linux runner can only cross-BUILD and cross-VET the freebsd target; it
+  # cannot run its tests. So this is honestly a compile + type-check job, not a
+  # test job. Behavioural FreeBSD divergence still needs a real FreeBSD host.
+  #
+  # Host Go, not the dagger job's: this compiles the repo itself, so the
+  # toolchain comes from go.mod, not ci/go.mod. shard-common is checked out at
+  # its default branch, the same way the ci job above does it.
+  cross-build:
+    name: cross-build (freebsd)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: retry-endpoint
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: lightwebinc/shard-common
+          path: shard-common
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: retry-endpoint/go.mod
+
+      - name: Use local shard-common
+        working-directory: retry-endpoint
+        run: go mod edit -replace github.com/lightwebinc/shard-common=../shard-common
+
+      - name: Build (freebsd/amd64)
+        working-directory: retry-endpoint
+        env:
+          GOOS: freebsd
+          GOARCH: amd64
+        run: go build -buildvcs=false ./...
+
+      # `go build ./...` does not compile _test.go, so a test that references a
+      # linux-only symbol without a build tag still slips through. go vet
+      # type-checks the test files too — which is precisely the defect class this
+      # job exists to catch.
+      - name: Vet (freebsd/amd64)
+        working-directory: retry-endpoint
+        env:
+          GOOS: freebsd
+          GOARCH: amd64
+        run: go vet ./...
