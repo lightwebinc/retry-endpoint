@@ -196,10 +196,36 @@ func (c *Client) recover(ctx context.Context, j job) {
 	// In-flight claim dedups sibling downstream endpoints when a shared cache
 	// backend is configured. nil deduper (memory backend) => per-process only.
 	if c.cfg.Dedup != nil {
-		var claim [16]byte
-		binary.BigEndian.PutUint64(claim[0:8], j.hashKey)
-		binary.BigEndian.PutUint64(claim[8:16], j.seq)
-		set, err := c.cfg.Dedup.SetNX(claim[:], []byte("1"), c.cfg.DedupWindow)
+		var gap [16]byte
+		binary.BigEndian.PutUint64(gap[0:8], j.hashKey)
+		binary.BigEndian.PutUint64(gap[8:16], j.seq)
+		claim := gap[:]
+		// The claim exists so sibling endpoints do not all fetch the SAME gap from
+		// upstream. Whether that is safe depends on how the recovered frame is
+		// DELIVERED, and that changed when recovery started honouring the retransmit
+		// modes:
+		//
+		//   MULTICAST — one winner's retransmit reaches every requester, so a
+		//               gap-only key is correct and maximally dedups.
+		//   UNICAST   — the winner sends ONLY to its own requester. A gap-only key
+		//               would make every OTHER requester lose the race and receive
+		//               NOTHING, having to wait out its own NACK timeout. The claim
+		//               must therefore be per-requester.
+		//
+		// A cross-instance waiter list is not an option: the losing requester's NACK
+		// may have landed on a DIFFERENT endpoint process entirely, which is the whole
+		// reason this claim is in a shared store. Widening the key is the fix that
+		// works across instances.
+		//
+		// Repeat NACKs from the SAME requester inside the window still dedup, which is
+		// what this guard is actually protecting upstream from.
+		if c.cfg.Unicast && j.requester != nil {
+			claim = make([]byte, 0, len(gap)+len(j.requester.IP)+2)
+			claim = append(claim, gap[:]...)
+			claim = append(claim, j.requester.IP...)
+			claim = append(claim, byte(j.requester.Port>>8), byte(j.requester.Port))
+		}
+		set, err := c.cfg.Dedup.SetNX(claim, []byte("1"), c.cfg.DedupWindow)
 		if err != nil {
 			c.log.Debug("proxy in-flight SETNX error", "err", err)
 		} else if !set {

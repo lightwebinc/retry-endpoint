@@ -363,3 +363,73 @@ func TestRecover_BothModes(t *testing.T) {
 		t.Errorf("sends = %d multicast / %d unicast, want 1 / 1", frt.count(), frt.unicastCount())
 	}
 }
+
+// Two DIFFERENT requesters NACKing the SAME gap must BOTH be served in unicast mode.
+//
+// Regression test. The in-flight claim keys the gap (hashKey||seq) so sibling endpoints
+// do not all fetch it from upstream. That is correct while recovery MULTICASTS — one
+// winner's retransmit reaches everyone. Once recovery started unicasting to the
+// requester, a gap-only key meant the loser of the race received NOTHING and had to wait
+// out its own NACK timeout. Devnet masked this by running CACHE_BACKEND=memory, where the
+// deduper is nil and the claim never runs at all; it only bites on a shared backend.
+func TestRecover_UnicastDedupIsPerRequester(t *testing.T) {
+	fr := makeFrame(7, 7)
+	up := startUpstream(t, "serve", fr)
+	defer up.close()
+
+	dd := newFakeDedup()
+	fc := newFakeCache()
+	frt := &fakeRetrans{}
+	c := newTestClient(Config{
+		Upstreams:   []string{up.addr()},
+		Cache:       fc,
+		Retrans:     frt,
+		Unicast:     true,
+		Dedup:       dd,
+		DedupWindow: time.Minute,
+	})
+
+	a := &net.UDPAddr{IP: net.ParseIP("fd00::a"), Port: 9300}
+	b := &net.UDPAddr{IP: net.ParseIP("fd00::b"), Port: 9300}
+
+	c.recover(context.Background(), job{hashKey: 7, seq: 7, requester: a})
+	c.recover(context.Background(), job{hashKey: 7, seq: 7, requester: b})
+
+	if got := frt.unicastCount(); got != 2 {
+		t.Errorf("unicast count = %d, want 2 — the second requester lost the in-flight "+
+			"claim and was never served", got)
+	}
+
+	// The SAME requester repeating inside the window must still dedup: that is the
+	// upstream-protection this claim exists for.
+	c.recover(context.Background(), job{hashKey: 7, seq: 7, requester: a})
+	if got := frt.unicastCount(); got != 2 {
+		t.Errorf("unicast count = %d after a repeat from the same requester, want 2", got)
+	}
+}
+
+// Multicast mode must keep the gap-only key: one retransmit serves every requester, so
+// widening the key there would multiply identical upstream fetches for no benefit.
+func TestRecover_MulticastDedupStaysGapOnly(t *testing.T) {
+	fr := makeFrame(8, 8)
+	up := startUpstream(t, "serve", fr)
+	defer up.close()
+
+	dd := newFakeDedup()
+	c := newTestClient(Config{
+		Upstreams:   []string{up.addr()},
+		Cache:       newFakeCache(),
+		Retrans:     &fakeRetrans{},
+		Multicast:   true,
+		Dedup:       dd,
+		DedupWindow: time.Minute,
+	})
+	frt := c.cfg.Retrans.(*fakeRetrans)
+
+	c.recover(context.Background(), job{hashKey: 8, seq: 8, requester: &net.UDPAddr{IP: net.ParseIP("fd00::a"), Port: 9300}})
+	c.recover(context.Background(), job{hashKey: 8, seq: 8, requester: &net.UDPAddr{IP: net.ParseIP("fd00::b"), Port: 9300}})
+
+	if got := frt.count(); got != 1 {
+		t.Errorf("multicast retransmit count = %d, want 1 (gap-only claim must still dedup)", got)
+	}
+}
