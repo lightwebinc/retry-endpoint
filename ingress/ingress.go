@@ -560,6 +560,13 @@ func (w *Worker) openRawSocket() (int, error) {
 		_ = unix.Close(fd)
 		return -1, fmt.Errorf("SO_REUSEADDR: %w", err)
 	}
+	// Platform-specific co-bind options. Linux needs nothing beyond the
+	// SO_REUSEADDR above; FreeBSD additionally requires SO_REUSEPORT on BOTH
+	// sharers. See cobind_freebsd.go for the measured matrix.
+	if err := coBindOpts(fd); err != nil {
+		_ = unix.Close(fd)
+		return -1, fmt.Errorf("co-bind opts: %w", err)
+	}
 	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, socketRecvBuf)
 	// Scope this socket to the groups it actually joined. Linux-only knob; on other
 	// platforms the default behaviour already matches. See mcastall_linux.go.

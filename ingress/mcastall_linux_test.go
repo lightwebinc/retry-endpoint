@@ -48,3 +48,21 @@ func TestOpenRawSocket_ReuseAddrStillSet(t *testing.T) {
 		t.Errorf("SO_REUSEADDR = %d (err %v), want non-zero", got, err)
 	}
 }
+
+// coBindOpts must stay a NO-OP on Linux. Linux shares this wildcard port across
+// EUIDs via SO_REUSEADDR alone; setting SO_REUSEPORT would force the kernel's
+// same-EUID anti-hijack check and DEFEAT the collapsed-node co-bind with a
+// differently-owned shard-listener that works today.
+func TestCoBindOptsLeavesReusePortOffOnLinux(t *testing.T) {
+	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("socket: %v", err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	if err := coBindOpts(fd); err != nil {
+		t.Fatalf("coBindOpts: %v", err)
+	}
+	if got, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT); err != nil || got != 0 {
+		t.Errorf("SO_REUSEPORT = %d (err %v), want 0 — enabling it on Linux breaks the cross-EUID SO_REUSEADDR share", got, err)
+	}
+}
