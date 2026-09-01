@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"runtime"
 	"strconv"
@@ -65,6 +66,19 @@ type Config struct {
 	MCScope    string // "site" | "global" — also accepts legacy "link"/"org" in ASM mode
 	MCPrefix   uint16 // Derived from (SourceMode, MCScope) — upper 16 bits of the IPv6 group address
 	MCGroupID  uint16 // IANA group-id occupying bytes 12–13 (default 0x000B)
+
+	// Tee ingest (loopback frame mirror). TeeListen binds a dedicated
+	// loopback UDP socket fed by co-resident processes: the proxy's
+	// -retry-tee (own-origin frames, raw) and the listener's -retry-tee
+	// (fabric-received frames, teewire-enveloped with the original source).
+	// The address MUST be loopback — the envelope asserts a source address,
+	// so accepting it off the network would let a remote sender forge
+	// per-source attribution. MCJoinEnabled=false runs tee-only: no
+	// multicast join and no wildcard data-port bind at all (the co-bind
+	// end-state); it fails closed unless TeeListen is set, because a retry
+	// with neither feed answers every NACK with MISS while looking healthy.
+	TeeListen     netip.AddrPort // zero = disabled
+	MCJoinEnabled bool           // default true
 
 	// SSM (RFC 4607)
 	// SourceMode: "asm" (default) | "ssm"
@@ -196,6 +210,10 @@ func Load() (*Config, error) {
 		"NIC for multicast ingress")
 	flag.IntVar(&c.ListenPort, "listen-port", envInt("LISTEN_PORT", 9001),
 		"multicast listen port")
+	teeListen := flag.String("tee-listen", envStr("TEE_LISTEN", ""),
+		"loopback host:port (e.g. [::1]:9002) for the tee ingest socket fed by a co-resident proxy/listener -retry-tee; must be a loopback literal; empty = disabled")
+	flag.BoolVar(&c.MCJoinEnabled, "mc-join-enabled", envBool("MC_JOIN_ENABLED", true),
+		"join multicast groups and bind the wildcard data port for cache ingest; false = tee-only ingest (requires -tee-listen; frees the shared data port on a collapsed node)")
 
 	flag.StringVar(&c.CacheBackend, "cache-backend", envStr("CACHE_BACKEND", "memory"),
 		"cache backend: memory | redis | aerospike")
@@ -456,6 +474,25 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid -mc-group-id %q: %w", *groupIDFlag, err)
 	}
 	c.MCGroupID = gid
+
+	// Validate tee ingest. The tee socket accepts source-asserting envelopes,
+	// so it must never be reachable off-node: loopback literals only.
+	if *teeListen != "" {
+		ap, err := netip.ParseAddrPort(*teeListen)
+		if err != nil {
+			return nil, fmt.Errorf("invalid -tee-listen %q: %w", *teeListen, err)
+		}
+		if !ap.Addr().IsLoopback() || ap.Addr().Is4() || ap.Addr().Is4In6() {
+			return nil, fmt.Errorf("-tee-listen %q must be an IPv6 loopback literal such as [::1]:9002 (the tee envelope asserts frame sources, and the socket is AF_INET6)", *teeListen)
+		}
+		if ap.Port() == 0 {
+			return nil, fmt.Errorf("-tee-listen %q must carry an explicit port", *teeListen)
+		}
+		c.TeeListen = ap
+	}
+	if !c.MCJoinEnabled && !c.TeeListen.IsValid() {
+		return nil, fmt.Errorf("mc-join-enabled=false requires -tee-listen: with neither multicast join nor tee ingest the cache never fills and every NACK is answered MISS")
+	}
 
 	// Parse Aerospike seed nodes.
 	for _, h := range strings.Split(*aeroHosts, ",") {

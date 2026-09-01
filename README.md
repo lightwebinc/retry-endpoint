@@ -12,6 +12,13 @@ Caching endpoint for NACK-based retransmission in the BSV multicast pipeline.
 Receives BRC-124/BRC-128 frames from the multicast fabric, caches them, and retransmits
 on demand to `shard-listener` nodes that detect sequence gaps.
 
+The cache can also (or instead) be fed over loopback by co-resident processes:
+`-tee-listen` accepts the proxy's `-retry-tee` mirror (own-origin frames, raw)
+and the listener's `-retry-tee` mirror (fabric-received frames, source-preserving
+`teewire` envelope). With `-mc-join-enabled=false` the endpoint runs tee-only —
+no multicast join and no shared data-port bind at all. See
+[Configuration](docs/configuration.md) for the fail-closed rules.
+
 ```
 shard-proxy ──multicast──▶ FF05::<shard>:9001
                                          │

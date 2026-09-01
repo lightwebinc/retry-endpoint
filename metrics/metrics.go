@@ -67,6 +67,7 @@ type Recorder struct {
 
 	// Ingress metrics
 	framesReceived metric.Int64Counter
+	teeDatagrams   metric.Int64Counter
 	framesCached   metric.Int64Counter
 	cacheStored    metric.Int64Counter
 	framesDropped  metric.Int64Counter
@@ -233,6 +234,10 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		metric.WithDescription("Frames dropped")); err != nil {
 		return nil, err
 	}
+	if r.teeDatagrams, err = meter.Int64Counter("bre_tee_datagrams_total",
+		metric.WithDescription("Datagrams accepted on the loopback tee-ingest socket, by form: encap = teewire-enveloped (listener mirror, original source preserved), raw = bare frame (proxy mirror, labelled by the loopback datagram source)")); err != nil {
+		return nil, err
+	}
 	if r.beaconAdvertsSent, err = meter.Int64Counter("bre_beacon_adverts_sent_total",
 		metric.WithDescription("ADVERT beacon datagrams sent to the discovery multicast group")); err != nil {
 		return nil, err
@@ -324,6 +329,14 @@ func (r *Recorder) RateLimitDrop(level string) {
 
 func (r *Recorder) FrameReceived() {
 	r.framesReceived.Add(context.Background(), 1)
+}
+
+// TeeDatagram counts a datagram accepted on the tee-ingest socket. form is
+// "encap" (teewire envelope) or "raw" (bare frame, the proxy tee's form).
+func (r *Recorder) TeeDatagram(form string) {
+	r.teeDatagrams.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("form", form),
+	))
 }
 
 // FrameCached counts a frame stored into the repair cache. source is the

@@ -11,6 +11,14 @@
 // to ALL such sockets, so a second retry-endpoint worker would store each frame
 // twice; hence exactly one worker.
 //
+// A second, optional ingest exists beside it: [Worker.RunTee] binds a
+// dedicated loopback socket fed by co-resident processes mirroring frames
+// (proxy -retry-tee: own egress, raw; listener -retry-tee: fabric-received
+// frames, teewire-enveloped with their original source). With both feeds a
+// frame this node receives natively may store twice — an idempotent overwrite
+// of identical bytes. Tee-only operation (join disabled) is the collapsed-node
+// end-state that frees the shared wildcard data port entirely.
+//
 // # Hot path per frame
 //
 //  1. Recvfrom (64 MiB receive buffer)
@@ -36,6 +44,7 @@ import (
 	"github.com/lightwebinc/shard-common/bundle"
 	"github.com/lightwebinc/shard-common/frame"
 	"github.com/lightwebinc/shard-common/netjoin"
+	"github.com/lightwebinc/shard-common/teewire"
 
 	"github.com/lightwebinc/retry-endpoint/cache"
 	"github.com/lightwebinc/retry-endpoint/metrics"
@@ -110,6 +119,9 @@ func (w *Worker) SetGroupSources(src GroupSources) {
 // Run opens a SO_REUSEADDR socket, joins all multicast groups, and processes
 // frames until ctx is cancelled.
 func (w *Worker) Run(ctx context.Context) error {
+	if w.iface == nil {
+		return fmt.Errorf("ingress: no interface (multicast join requires -mc-iface; tee-only nodes must not call Run)")
+	}
 	fd, err := w.openRawSocket()
 	if err != nil {
 		return fmt.Errorf("ingress: open socket: %w", err)
@@ -543,6 +555,120 @@ func (w *Worker) processAnchorFrame(raw []byte, src string) {
 			"seq_num", af.SeqNum,
 		)
 	}
+}
+
+// RunTee opens the dedicated loopback tee-ingest socket and processes
+// mirrored datagrams until ctx is cancelled. Two forms are accepted:
+//
+//   - teewire-enveloped (the listener's -retry-tee): the envelope carries the
+//     frame's original fabric source, which labels the per-source cache
+//     counters exactly as a natively received frame would — this is what
+//     keeps the RetryCacheSourceStarved contract intact on a tee-fed cache.
+//   - raw frames (the proxy's -retry-tee form): locally-originated frames
+//     mirrored verbatim; labelled by the loopback datagram source.
+//
+// The socket binds listen EXCLUSIVELY (no SO_REUSEADDR/SO_REUSEPORT): unlike
+// the shared wildcard data port, unicast delivery here is deterministic, and a
+// bind conflict is a config error that must fail loudly. The listen address is
+// validated as loopback by config — the envelope asserts a source address and
+// must never be accepted off-node.
+//
+// RunTee may run alongside Run (transition: both feeds active; duplicate
+// stores are idempotent overwrites of identical bytes) or alone
+// (mc-join-enabled=false, the tee-only end-state that frees the shared data
+// port on a collapsed node).
+func (w *Worker) RunTee(ctx context.Context, listen netip.AddrPort) error {
+	fd, err := openTeeSocket(listen)
+	if err != nil {
+		return fmt.Errorf("ingress tee: %w", err)
+	}
+
+	if w.rec != nil {
+		w.rec.WorkerReady()
+		defer w.rec.WorkerDone()
+	}
+
+	w.log.Info("tee ingest ready", "listen", listen.String())
+
+	tv := unix.NsecToTimeval((200 * time.Millisecond).Nanoseconds())
+	_ = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
+
+	go func() {
+		<-ctx.Done()
+		_ = unix.Close(fd)
+	}()
+
+	buf := make([]byte, recvBufSize)
+	for {
+		n, from, err := unix.Recvfrom(fd, buf, 0)
+		if err != nil {
+			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+				if ctx.Err() != nil {
+					return nil
+				}
+				continue
+			}
+			if err == unix.EBADF || err == unix.EINVAL {
+				return nil
+			}
+			if err == unix.EINTR {
+				continue
+			}
+			if ctx.Err() != nil {
+				return nil
+			}
+			w.log.Error("tee recvfrom error", "err", err)
+			continue
+		}
+		if n == 0 {
+			continue
+		}
+		pkt := buf[:n]
+		if teewire.IsEncap(pkt) {
+			src, payload, derr := teewire.Decap(pkt)
+			if derr != nil {
+				if w.rec != nil {
+					w.rec.FrameDropped("tee_decap_error")
+				}
+				if w.debug {
+					w.log.Debug("tee decap error", "err", derr, "len", n)
+				}
+				continue
+			}
+			if w.rec != nil {
+				w.rec.TeeDatagram("encap")
+			}
+			w.processFrame(payload, src.Addr().String())
+			continue
+		}
+		// Raw form: the proxy mirrors its own egress verbatim. Label with the
+		// datagram source (loopback), the same value a wildcard-bound data
+		// socket would have seen for it.
+		src := ""
+		if sa, ok := from.(*unix.SockaddrInet6); ok {
+			src = netip.AddrFrom16(sa.Addr).String()
+		}
+		if w.rec != nil {
+			w.rec.TeeDatagram("raw")
+		}
+		w.processFrame(pkt, src)
+	}
+}
+
+// openTeeSocket binds an exclusive AF_INET6 UDP socket on the given loopback
+// address. No co-bind options: the tee port is single-owner by design.
+func openTeeSocket(listen netip.AddrPort) (int, error) {
+	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return -1, fmt.Errorf("socket: %w", err)
+	}
+	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, socketRecvBuf)
+	sa := &unix.SockaddrInet6{Port: int(listen.Port()), Addr: listen.Addr().As16()}
+	if err := unix.Bind(fd, sa); err != nil {
+		_ = unix.Close(fd)
+		return -1, fmt.Errorf("bind %s: %w", listen, err)
+	}
+	return fd, nil
 }
 
 func (w *Worker) openRawSocket() (int, error) {

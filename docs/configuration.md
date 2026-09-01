@@ -16,6 +16,43 @@ interface the multicast fabric is reachable on.
 
 UDP port for multicast frame receive. Must match the proxy's `-egress-port`.
 
+### `-tee-listen` / `TEE_LISTEN` (default: empty = disabled)
+
+IPv6 loopback `host:port` literal (e.g. `[::1]:9002`) for the dedicated
+**tee-ingest socket**. Co-resident processes mirror frames into it over
+loopback UDP:
+
+- the proxy's `-retry-tee` — frames this node **originates** (raw form), which
+  the cache can never receive via multicast (own-source SSM joins are
+  structurally excluded);
+- the listener's `-retry-tee` — frames this node **receives** from the fabric,
+  wrapped in a `shard-common/teewire` envelope that carries the original
+  datagram source so per-source cache counters (`bre_cache_stored_total`, the
+  `RetryCacheSourceStarved` contract) attribute tee-fed frames exactly as
+  natively received ones.
+
+The socket binds the address **exclusively** (no `SO_REUSEADDR`/`SO_REUSEPORT`),
+so unicast delivery is deterministic — unlike a tee aimed at the shared
+wildcard data port, where kernel demux between co-bound sockets picks one
+receiver unpredictably. Validation **fails closed** on any non-loopback
+address: the envelope asserts a source address, and accepting it off the
+network would let a remote sender forge per-source attribution.
+Accepted datagrams are counted in `bre_tee_datagrams_total{form="encap"|"raw"}`.
+
+### `-mc-join-enabled` / `MC_JOIN_ENABLED` (default: `true`)
+
+When `false`, the endpoint performs **no multicast join and does not bind the
+wildcard data port at all** — tee-only ingest, the collapsed-node end-state
+that frees the shared `:9001` co-bind (on FreeBSD this is what ultimately
+removes the same-uid co-bind contract). Fails closed unless `-tee-listen` is
+set: with neither feed the cache never fills and every NACK is answered MISS
+while the process looks healthy.
+
+Flip it off only where BOTH tees are live on the node — the proxy's
+(own-origin coverage) and the listener's (remote-origin coverage) — and the
+listener joins every band this cache is expected to repair. A band the
+listener does not join is a band this cache silently stops covering.
+
 ### `-scope` / `MC_SCOPE` (default: `site`)
 
 Multicast scope nibble. Must match the proxy's and listeners' `-scope`.

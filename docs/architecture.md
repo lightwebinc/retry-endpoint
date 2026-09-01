@@ -253,6 +253,41 @@ worker avoids this entirely. (Declaring `SO_REUSEPORT` would instead force a
 same-EUID check and defeat the `SO_REUSEADDR` cross-user share; its
 load-balancing applies to unicast UDP only.)
 
+### Tee ingest (loopback frame mirror)
+
+`-tee-listen` opens a second, optional ingest: an **exclusively bound** IPv6
+loopback UDP socket fed by co-resident processes mirroring frames into the
+cache. Two datagram forms are accepted, branched on the leading 4 bytes:
+
+- **Raw frames** (fabric magic `0xE3E1F3E8`) — the proxy's `-retry-tee` form:
+  frames this node originates, mirrored verbatim. The per-source cache counter
+  is labelled with the loopback datagram source, exactly as the wildcard data
+  socket would have labelled it.
+- **`teewire` envelopes** (magic `TEE1`) — the listener's `-retry-tee` form:
+  frames this node *received* from the fabric, prefixed with a 24-byte header
+  carrying the original datagram source (see `shard-common/teewire`). The
+  envelope is unwrapped and the payload processed through the normal
+  `processFrame` path with that original source, so per-source attribution —
+  the `RetryCacheSourceStarved` alerting contract — is identical to native
+  multicast receive. Malformed envelopes are dropped and counted
+  (`bre_frames_dropped_total{reason="tee_decap_error"}`).
+
+The tee socket is **loopback-only, fail-closed at config validation**: the
+envelope asserts a source address, so accepting it off-node would allow remote
+attribution forgery. It deliberately does NOT target the shared wildcard data
+port: with the listener co-bound there, kernel unicast demux delivers each
+datagram to only ONE of the bound sockets, unpredictably — a tee aimed at
+`:9001` can be swallowed by the listener (or loop a listener's own mirror back
+into itself). The dedicated port makes delivery deterministic and single-owner.
+
+With both the multicast join and a tee active, a frame received natively may be
+stored twice — an idempotent overwrite of identical bytes at the same
+`HashKey ∥ SeqNum` key (the TTL refreshes). With `-mc-join-enabled=false` the
+endpoint runs **tee-only**: no join, no wildcard bind, and the cache's coverage
+is exactly what the co-resident proxy (own-origin) and listener (remote-origin)
+mirror in. Both feeds' death is process-fatal, like the multicast worker's: a
+silently dead tee is a cache that answers MISS forever while looking healthy.
+
 ## Cache
 
 The frame store is the modular [`shard-common/cache`](https://github.com/lightwebinc/shard-common/blob/main/docs/cache-backend.md)

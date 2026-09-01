@@ -343,10 +343,15 @@ func run() error {
 	}
 	slog.Info("multicast groups", "count", len(groups))
 
-	// Resolve ingress interface.
-	mcIface, err := net.InterfaceByName(cfg.MCIface)
-	if err != nil {
-		return err
+	// Resolve ingress interface. Only the multicast join path needs it; a
+	// tee-only endpoint (mc-join-enabled=false) may run on a host where the
+	// named NIC does not exist.
+	var mcIface *net.Interface
+	if cfg.MCJoinEnabled {
+		mcIface, err = net.InterfaceByName(cfg.MCIface)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Resolve egress interfaces.
@@ -520,23 +525,43 @@ func run() error {
 		}()
 	}
 
-	// Start ingress worker. Its death is fatal: without ingress the cache
+	// Start ingress workers. Their death is fatal: without ingress the cache
 	// never fills and every NACK answered from here is a miss, yet the
 	// metrics/NACK/beacon goroutines would keep the process looking healthy.
 	// Surface it as a non-zero exit so the supervisor restarts us and the
-	// failure is visible where operators look.
+	// failure is visible where operators look. The same applies to the tee
+	// ingest — on a tee-only node it is the cache's ONLY feed, and even
+	// alongside a multicast join its silent death would strand own-source
+	// (proxy tee) or unjoined-band (listener tee) coverage.
 	fatalCh := make(chan error, 1)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := ing.Run(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("ingress exited with error", "err", err)
-			select {
-			case fatalCh <- fmt.Errorf("ingress: %w", err):
-			default:
+	if cfg.MCJoinEnabled {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ing.Run(ctx); err != nil && ctx.Err() == nil {
+				slog.Error("ingress exited with error", "err", err)
+				select {
+				case fatalCh <- fmt.Errorf("ingress: %w", err):
+				default:
+				}
 			}
-		}
-	}()
+		}()
+	} else {
+		slog.Info("multicast join disabled: tee-only ingest", "tee_listen", cfg.TeeListen.String())
+	}
+	if cfg.TeeListen.IsValid() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ing.RunTee(ctx, cfg.TeeListen); err != nil && ctx.Err() == nil {
+				slog.Error("tee ingress exited with error", "err", err)
+				select {
+				case fatalCh <- fmt.Errorf("tee ingress: %w", err):
+				default:
+				}
+			}
+		}()
+	}
 
 	// Start server.
 	wg.Add(1)
