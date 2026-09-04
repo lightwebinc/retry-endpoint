@@ -116,6 +116,54 @@ func (w *Worker) SetGroupSources(src GroupSources) {
 	w.sources = src
 }
 
+// joinInterval is how often memberships are re-asserted. Well inside the MLD
+// query intervals the fabric runs, and cheap: a handful of setsockopt calls
+// against a socket we already hold.
+const joinInterval = 30 * time.Second
+
+// joinAll (re)joins every configured group. On the FIRST pass an error is fatal
+// — a worker that cannot join has nothing to do. On a re-assert it is not: the
+// common case is a membership that is already present, which some stacks report
+// as an error, and a node must not lose a working ingress because a redundant
+// join was refused.
+func (w *Worker) joinAll(fd int, first bool) error {
+	for _, grp := range w.groups {
+		ga, ok := netip.AddrFromSlice(grp.IP.To16())
+		if !ok {
+			return fmt.Errorf("ingress: bad group address %s", grp.IP)
+		}
+		// SSM sources for this group, if any. ASM join when nil/empty.
+		var srcs []netip.Addr
+		if w.sources != nil {
+			srcs = w.sources[ga]
+		}
+		if err := netjoin.Join(fd, w.iface.Index, ga, srcs); err != nil {
+			if first {
+				return fmt.Errorf("ingress: join group %s (%d sources): %w", grp.IP, len(srcs), err)
+			}
+			w.log.Debug("re-assert join", "group", grp.IP, "sources", len(srcs), "err", err)
+		}
+	}
+	return nil
+}
+
+// reassertJoins re-runs the joins until ctx is done. Errors are debug-level by
+// design: the expected outcome of re-joining a live membership is a refusal, so
+// logging those at warn would bury the real ones under one line per group per
+// interval, forever.
+func (w *Worker) reassertJoins(ctx context.Context, fd int) {
+	t := time.NewTicker(joinInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			_ = w.joinAll(fd, false)
+		}
+	}
+}
+
 // Run opens a SO_REUSEADDR socket, joins all multicast groups, and processes
 // frames until ctx is cancelled.
 func (w *Worker) Run(ctx context.Context) error {
@@ -127,21 +175,9 @@ func (w *Worker) Run(ctx context.Context) error {
 		return fmt.Errorf("ingress: open socket: %w", err)
 	}
 
-	for _, grp := range w.groups {
-		ga, ok := netip.AddrFromSlice(grp.IP.To16())
-		if !ok {
-			_ = unix.Close(fd)
-			return fmt.Errorf("ingress: bad group address %s", grp.IP)
-		}
-		// SSM sources for this group, if any. ASM join when nil/empty.
-		var srcs []netip.Addr
-		if w.sources != nil {
-			srcs = w.sources[ga]
-		}
-		if err := netjoin.Join(fd, w.iface.Index, ga, srcs); err != nil {
-			_ = unix.Close(fd)
-			return fmt.Errorf("ingress: join group %s (%d sources): %w", grp.IP, len(srcs), err)
-		}
+	if err := w.joinAll(fd, true); err != nil {
+		_ = unix.Close(fd)
+		return err
 	}
 
 	if w.rec != nil {
@@ -158,6 +194,25 @@ func (w *Worker) Run(ctx context.Context) error {
 		<-ctx.Done()
 		_ = unix.Close(fd)
 	}()
+
+	// Re-assert the memberships on a cadence. A join is not a durable
+	// declaration: the kernel's membership can be lost underneath a running
+	// socket when the forwarding state it depends on changes — a routing
+	// re-convergence that moves the multicast RPF, a forwarder restart, an
+	// interface rebuild. Nothing in the socket API tells us; recvfrom simply
+	// stops producing frames for that source while every other source keeps
+	// flowing, so the process looks healthy and its per-source counter silently
+	// freezes.
+	//
+	// Observed on four nodes in one day after a single BGP best-path flip. Each
+	// needed a manual `systemctl restart` to re-join, and a restart is the
+	// crudest possible form of what this loop does cheaply.
+	//
+	// Same reasoning as the firewall's miner push-gate, which is re-asserted
+	// every pass because a converge replaces the ruleset underneath it: state we
+	// do not own can be replaced without telling us, so assert it on our own
+	// cadence rather than trusting it to persist.
+	go w.reassertJoins(ctx, fd)
 
 	buf := make([]byte, recvBufSize)
 	for {
