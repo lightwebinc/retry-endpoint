@@ -70,7 +70,7 @@ func sendTo(t *testing.T, dst netip.AddrPort, pkt []byte) {
 	if err != nil {
 		t.Fatalf("dial tee: %v", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if _, err := c.Write(pkt); err != nil {
 		t.Fatalf("write tee: %v", err)
 	}
