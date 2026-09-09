@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"github.com/lightwebinc/retry-endpoint/metrics"
 	"github.com/lightwebinc/retry-endpoint/proxy"
 	"github.com/lightwebinc/retry-endpoint/ratelimit"
+	"github.com/lightwebinc/retry-endpoint/retransmit"
 )
 
 // NACKSize is the fixed size of a BRC-126 NACK datagram (64 bytes).
@@ -293,7 +295,7 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 	} else {
 		srcIP = net.IPv6unspecified
 	}
-	allowed, level := s.rateLimiter.Allow(srcIP, startSeq)
+	allowed, level := s.rateLimiter.Allow(srcIP, hashKey, startSeq)
 	if !allowed {
 		if s.rec != nil {
 			s.rec.RateLimitDrop(string(level))
@@ -402,13 +404,24 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 
 	var ackFlags byte
 	if s.retransmitMC {
-		if err := s.retransmit.Retransmit(raw, txID); err != nil {
+		switch err := s.retransmit.Retransmit(raw, txID); {
+		case err == nil:
+			ackFlags |= ackFlagMulticastSent
+			if s.rec != nil {
+				s.rec.Retransmit()
+			}
+		case errors.Is(err, retransmit.ErrDedupSuppressed):
+			// A sibling instance already claimed this (HashKey, SeqNum), so
+			// nothing of ours went on the wire. Leave the multicast flag
+			// clear: flagging it would cancel the requester's gap on trust
+			// for a copy that may have left the wire a full dedup window
+			// ago. The retransmitter counts the drop; we fall through, and
+			// if no unicast copy is sent either the requester simply gets no
+			// ACK and escalates — the honest outcome for a repair this
+			// endpoint did not perform.
+		default:
 			s.log.Error("retransmit error", "err", err)
 			return
-		}
-		ackFlags |= ackFlagMulticastSent
-		if s.rec != nil {
-			s.rec.Retransmit()
 		}
 	}
 	// Unicast the frame back to the requester when unicast mode is on, or
@@ -425,7 +438,17 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		}
 	}
 
-	if !s.suppressACK && src != nil {
+	// ACK means "retransmit dispatched" (BRC-126), and a bare or
+	// multicast-flagged ACK cancels the requester's gap on trust. So when a
+	// send was ATTEMPTED and produced nothing — dedup-suppressed multicast, or
+	// a failed unicast write — stay quiet and let the requester escalate to
+	// the next endpoint rather than close a gap nothing repaired.
+	//
+	// An endpoint configured with neither send mode is the separate, deliberate
+	// "answer without repairing" posture, whose whole purpose is to stop
+	// escalation; nothing was attempted there, so its bare ACK is preserved.
+	attempted := s.retransmitMC || ((s.retransmitUC || proxied) && src != nil)
+	if !s.suppressACK && src != nil && (ackFlags != 0 || !attempted) {
 		s.sendResponse(conn, src, msgTypeACK, ackFlags, seqNum)
 	}
 

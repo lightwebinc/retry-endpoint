@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// testFlowKey is a stand-in HashKey: the sequence tier is scoped per flow, so a
+// test that means to exercise the tier must hold the flow constant.
+const testFlowKey uint64 = 0xABCD0123DEADBEEF
+
 func TestIPRateLimit(t *testing.T) {
 	l := New(Config{
 		IPRate:      2,
@@ -17,14 +21,14 @@ func TestIPRateLimit(t *testing.T) {
 
 	// First two should pass (burst).
 	for i := uint64(0); i < 2; i++ {
-		ok, _ := l.Allow(ip, i)
+		ok, _ := l.Allow(ip, testFlowKey, i)
 		if !ok {
 			t.Fatalf("request %d should be allowed within burst", i)
 		}
 	}
 
 	// Third should be dropped.
-	ok, level := l.Allow(ip, 99)
+	ok, level := l.Allow(ip, testFlowKey, 99)
 	if ok {
 		t.Fatal("expected IP rate limit to drop request")
 	}
@@ -45,14 +49,14 @@ func TestSequenceRateLimit(t *testing.T) {
 
 	// First three requests for same seqID should pass.
 	for i := 0; i < 3; i++ {
-		ok, _ := l.Allow(ip, seqID)
+		ok, _ := l.Allow(ip, testFlowKey, seqID)
 		if !ok {
 			t.Fatalf("request %d should be allowed within sequence max", i)
 		}
 	}
 
 	// Fourth should be dropped.
-	ok, level := l.Allow(ip, seqID)
+	ok, level := l.Allow(ip, testFlowKey, seqID)
 	if ok {
 		t.Fatal("expected sequence rate limit to drop request")
 	}
@@ -72,7 +76,7 @@ func TestDifferentSequencesIndependent(t *testing.T) {
 
 	// Each unique SeqNum gets its own counter.
 	for i := uint64(0); i < 5; i++ {
-		ok, _ := l.Allow(ip, i<<32|0xdeadbeef)
+		ok, _ := l.Allow(ip, testFlowKey, i<<32|0xdeadbeef)
 		if !ok {
 			t.Fatalf("seqID %d should be allowed (first request)", i)
 		}
@@ -95,18 +99,18 @@ func TestSequenceLimiterSlidingWindow(t *testing.T) {
 
 	// Fill the window.
 	for i := 0; i < 2; i++ {
-		if ok, _ := l.Allow(ip, seqID); !ok {
+		if ok, _ := l.Allow(ip, testFlowKey, seqID); !ok {
 			t.Fatalf("request %d should be allowed within window", i)
 		}
 	}
 	// Third in the same window must be dropped.
-	if ok, level := l.Allow(ip, seqID); ok || level != LevelSequence {
+	if ok, level := l.Allow(ip, testFlowKey, seqID); ok || level != LevelSequence {
 		t.Fatalf("expected sequence drop, got ok=%v level=%q", ok, level)
 	}
 
 	// After the window elapses the limiter must self-heal.
 	time.Sleep(75 * time.Millisecond)
-	if ok, _ := l.Allow(ip, seqID); !ok {
+	if ok, _ := l.Allow(ip, testFlowKey, seqID); !ok {
 		t.Fatal("expected sequence limiter to admit requests after window expiry")
 	}
 }
@@ -122,10 +126,10 @@ func TestSequenceLimiterDefaultWindow(t *testing.T) {
 	})
 	ip := net.ParseIP("::1")
 	const seqID = uint64(0x0102030405060708)
-	if ok, _ := l.Allow(ip, seqID); !ok {
+	if ok, _ := l.Allow(ip, testFlowKey, seqID); !ok {
 		t.Fatal("first request must pass regardless of window default")
 	}
-	if ok, level := l.Allow(ip, seqID); ok || level != LevelSequence {
+	if ok, level := l.Allow(ip, testFlowKey, seqID); ok || level != LevelSequence {
 		t.Fatalf("second request must be sequence-limited; got ok=%v level=%q", ok, level)
 	}
 }
@@ -283,5 +287,56 @@ func TestGroupRateLimit_SenderAlias(t *testing.T) {
 	}
 	if l.AllowChain(ip, hashKey) {
 		t.Error("fourth call should be blocked")
+	}
+}
+
+// Two different flows repairing the SAME SeqNum must not share a bucket. Every
+// flow's counter starts at 1, so a bare-SeqNum bucket was shared fabric-wide:
+// ~100 junk NACKs a minute for a low sequence number exhausted repair of that
+// sequence for every flow the endpoint served — targeted repair-denial for
+// about 107 bytes a second, and self-inflicted contention at scale.
+func TestSequenceTierIsScopedPerFlow(t *testing.T) {
+	l := New(Config{
+		IPRate: 1e9, IPBurst: 1_000_000,
+		ChainRate: 1e9, ChainWindow: time.Second,
+		SequenceMax: 2, SequenceWindow: time.Minute,
+		GroupRate: 1e9, GroupBurst: 1_000_000,
+	})
+	ip := net.ParseIP("::1")
+	const seq uint64 = 1 // the value every flow starts at
+
+	// Exhaust flow A's budget for this SeqNum.
+	for i := 0; i < 2; i++ {
+		if ok, _ := l.Allow(ip, 0xAAAA, seq); !ok {
+			t.Fatalf("flow A request %d rejected while under budget", i)
+		}
+	}
+	if ok, level := l.Allow(ip, 0xAAAA, seq); ok || level != LevelSequence {
+		t.Fatalf("flow A not limited after its budget: ok=%v level=%q", ok, level)
+	}
+
+	// An unrelated flow at the same SeqNum must be unaffected.
+	if ok, level := l.Allow(ip, 0xBBBB, seq); !ok {
+		t.Fatalf("flow B starved by flow A's budget at the same SeqNum (level=%q) — repair-denial across the fabric", level)
+	}
+}
+
+// The sequence map is keyed by unauthenticated NACK fields, so it must not grow
+// without bound: entries whose window has fully aged out are swept.
+func TestSequenceLimiterEvictsExpiredKeys(t *testing.T) {
+	sl := newSequenceLimiter(1, 10*time.Millisecond)
+	for i := 0; i < 1000; i++ {
+		sl.Allow(uint64(i), uint64(i))
+	}
+	if len(sl.seqs) != 1000 {
+		t.Fatalf("pre-eviction size = %d, want 1000", len(sl.seqs))
+	}
+	time.Sleep(20 * time.Millisecond)
+	sl.mu.Lock()
+	sl.evictExpiredLocked(time.Now())
+	n := len(sl.seqs)
+	sl.mu.Unlock()
+	if n != 0 {
+		t.Errorf("expired keys survived eviction: %d remain", n)
 	}
 }

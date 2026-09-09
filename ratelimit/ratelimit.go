@@ -86,13 +86,25 @@ func New(cfg Config) *Limiter {
 }
 
 // Allow checks the IP and sequence tiers (pre-lookup).
-// srcIP is the listener source address; startSeq is the StartSeq field
-// from the NACK datagram (SeqNum of the missing frame). Returns (true, "") if allowed.
-func (r *Limiter) Allow(srcIP net.IP, startSeq uint64) (bool, Level) {
+// srcIP is the listener source address; hashKey/startSeq are the HashKey and
+// StartSeq fields from the NACK datagram. Returns (true, "") if allowed.
+//
+// The sequence tier is scoped to the FLOW (hashKey, startSeq), not to the bare
+// SeqNum. Every flow's counter starts at 1, so a bare-SeqNum bucket is shared by
+// every flow on the fabric that is repairing the same counter value: ~100 junk
+// NACKs a minute for a low sequence number exhausted repair of that sequence for
+// EVERY flow this endpoint serves, which is a targeted repair-denial for about
+// 107 bytes a second. It also self-inflicts at scale, since thousands of
+// legitimate flows contend for one bucket per hot low SeqNum.
+//
+// hashKey 0 (an unstamped frame) falls back to the bare SeqNum: those gaps
+// cannot be attributed to a flow, and bucketing them together is the same
+// deliberate choice AllowChain makes for the same reason.
+func (r *Limiter) Allow(srcIP net.IP, hashKey, startSeq uint64) (bool, Level) {
 	if !r.ipLimiter.Allow(srcIP.String()) {
 		return false, LevelIP
 	}
-	if !r.sequenceLimiter.Allow(startSeq) {
+	if !r.sequenceLimiter.Allow(hashKey, startSeq) {
 		return false, LevelSequence
 	}
 	return true, ""
@@ -207,30 +219,49 @@ func (r *slidingWindowLimiter) Allow(key string) bool {
 // short of restarting the process. The sliding-window form bounds memory and
 // self-heals: a SequenceID that has been quiet for [window] is re-admitted
 // at full capacity.
+// seqKey scopes a sequence bucket to one flow. See Limiter.Allow.
+type seqKey struct {
+	hashKey uint64
+	seqNum  uint64
+}
+
+// maxSequenceKeys bounds the sequence map. Reached only under key diversity far
+// above any real flow count, at which point expired entries are swept.
+const maxSequenceKeys = 100_000
+
 type sequenceLimiter struct {
 	mu     sync.Mutex
-	seqs   map[uint64]*windowEntry
+	seqs   map[seqKey]*windowEntry
 	max    int
 	window time.Duration
 }
 
 func newSequenceLimiter(max int, window time.Duration) *sequenceLimiter {
 	return &sequenceLimiter{
-		seqs:   make(map[uint64]*windowEntry),
+		seqs:   make(map[seqKey]*windowEntry),
 		max:    max,
 		window: window,
 	}
 }
 
-func (r *sequenceLimiter) Allow(seqNum uint64) bool {
+func (r *sequenceLimiter) Allow(hashKey, seqNum uint64) bool {
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	entry, ok := r.seqs[seqNum]
+	key := seqKey{hashKey: hashKey, seqNum: seqNum}
+	entry, ok := r.seqs[key]
 	if !ok {
+		// Bound the map before inserting. Keys are attacker-influenced (a NACK's
+		// HashKey and SeqNum are unauthenticated), and nothing evicted them, so
+		// spoofed key diversity grew this map without limit for the life of the
+		// process. Sweeping entries whose window has fully aged out reclaims
+		// every key that is no longer rate-limiting anything.
+		if len(r.seqs) >= maxSequenceKeys {
+			r.evictExpiredLocked(now)
+		}
 		entry = &windowEntry{timestamps: make([]time.Time, 0, r.max)}
-		r.seqs[seqNum] = entry
+		r.seqs[key] = entry
 	}
 
 	cutoff := now.Add(-r.window)
@@ -248,4 +279,24 @@ func (r *sequenceLimiter) Allow(seqNum uint64) bool {
 	}
 	entry.timestamps = append(entry.timestamps, now)
 	return true
+}
+
+// evictExpiredLocked drops sequence buckets whose whole window has aged out.
+// Callers hold r.mu. An entry with no live timestamps is rate-limiting nothing,
+// so removing it changes no decision — it only reclaims a key that an
+// unauthenticated NACK was able to create.
+func (r *sequenceLimiter) evictExpiredLocked(now time.Time) {
+	cutoff := now.Add(-r.window)
+	for k, e := range r.seqs {
+		live := false
+		for _, ts := range e.timestamps {
+			if ts.After(cutoff) {
+				live = true
+				break
+			}
+		}
+		if !live {
+			delete(r.seqs, k)
+		}
+	}
 }

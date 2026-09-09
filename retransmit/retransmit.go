@@ -3,6 +3,7 @@ package retransmit
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -17,6 +18,17 @@ import (
 	"github.com/lightwebinc/retry-endpoint/cache"
 	"github.com/lightwebinc/retry-endpoint/metrics"
 )
+
+// ErrDedupSuppressed reports that a multicast retransmit was NOT put on the
+// wire because a sibling instance already claimed this frame's
+// (HashKey, SeqNum) within the cross-instance dedup window.
+//
+// It is not a failure, but it is also not a send: a caller must never report a
+// multicast retransmit to the requester on the strength of it. A bare or
+// multicast-flagged ACK cancels the listener's gap on trust (BRC-126 § NACK
+// Dispatch Flow), and the sibling's copy may have left the wire up to a full
+// dedup window ago — so claiming it would close a gap that nothing repaired.
+var ErrDedupSuppressed = errors.New("retransmit suppressed by cross-instance dedup")
 
 // Retransmitter handles retransmitting cached frames.
 type Retransmitter struct {
@@ -221,7 +233,7 @@ func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 				if r.debug {
 					r.log.Debug("retransmit dropped by dedup", "txid", fmt.Sprintf("%x", txID[:8]))
 				}
-				return nil
+				return ErrDedupSuppressed
 			}
 		}
 	}
@@ -292,13 +304,25 @@ func (r *Retransmitter) openEgressSocket(iface *net.Interface) (*net.UDPConn, er
 	return udpConn, nil
 }
 
-// buildDedupKey builds a deduplication key from the frame.
-// Key: SeqNum (bytes 48–55), the monotonic per-flow counter for this frame.
+// buildDedupKey builds the cross-instance deduplication key for a frame.
+//
+// Key: HashKey ∥ SeqNum (bytes 40–55) — the per-flow identifier followed by
+// that flow's monotonic counter. Both fields sit at these offsets in every
+// cached frame version (BRC-124/128 92B, BRC-130's 104B fragment, BRC-132,
+// BRC-142's 66B bundle header and BRC-149 0x09), so one slice covers the
+// family; the length guard below is what rejects anything shorter.
+//
+// SeqNum ALONE is not a frame identity. Every flow's counter starts at 1, so
+// low sequence numbers collide across unrelated flows with near-certainty, and
+// a collision suppressed a live repair because some other flow happened to be
+// repairing the same counter value. Keying on the flow as well restores the
+// BRC-126 contract that a resent frame is identified by HashKey ∥ SeqNum. This
+// reads fields the proxy already stamps; it changes no wire format.
 func (r *Retransmitter) buildDedupKey(raw []byte) []byte {
 	if len(raw) < 56 {
 		return nil
 	}
-	key := make([]byte, 8)
-	copy(key, raw[48:56]) // SeqNum
+	key := make([]byte, 16)
+	copy(key, raw[40:56]) // HashKey ∥ SeqNum
 	return key
 }

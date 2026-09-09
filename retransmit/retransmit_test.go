@@ -1,7 +1,10 @@
 package retransmit
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -32,19 +35,44 @@ func TestBuildDedupKey(t *testing.T) {
 	if got := r.buildDedupKey(make([]byte, 10)); got != nil {
 		t.Errorf("expected nil for short frame, got %v", got)
 	}
-	// Valid: copy bytes 48..55.
+	// Valid: copy bytes 40..55 — HashKey followed by SeqNum.
 	raw := make([]byte, 56)
-	for i := 48; i < 56; i++ {
+	for i := 40; i < 56; i++ {
 		raw[i] = byte(i)
 	}
 	got := r.buildDedupKey(raw)
-	if len(got) != 8 {
-		t.Fatalf("len=%d", len(got))
+	if len(got) != 16 {
+		t.Fatalf("len=%d, want 16 (HashKey ∥ SeqNum)", len(got))
 	}
 	for i, b := range got {
-		if b != byte(48+i) {
-			t.Errorf("byte[%d] = 0x%02X, want 0x%02X", i, b, 48+i)
+		if b != byte(40+i) {
+			t.Errorf("byte[%d] = 0x%02X, want 0x%02X", i, b, 40+i)
 		}
+	}
+}
+
+// TestBuildDedupKey_DistinctFlowsSameSeq pins the defect the key width exists to
+// prevent: two different flows repairing the same SeqNum must not collide. Every
+// flow's counter starts at 1, so a SeqNum-only key made low sequence numbers
+// collide across the fabric and suppressed live repairs.
+func TestBuildDedupKey_DistinctFlowsSameSeq(t *testing.T) {
+	r := New(nil, nil, 0, 0, nil, nil, false)
+
+	flowA := make([]byte, 56)
+	binary.BigEndian.PutUint64(flowA[40:48], 0xAAAAAAAAAAAAAAAA) // HashKey A
+	binary.BigEndian.PutUint64(flowA[48:56], 1)                  // SeqNum 1
+
+	flowB := make([]byte, 56)
+	binary.BigEndian.PutUint64(flowB[40:48], 0xBBBBBBBBBBBBBBBB) // HashKey B
+	binary.BigEndian.PutUint64(flowB[48:56], 1)                  // same SeqNum
+
+	if bytes.Equal(r.buildDedupKey(flowA), r.buildDedupKey(flowB)) {
+		t.Error("distinct flows at the same SeqNum share a dedup key: a repair for one flow would suppress the other")
+	}
+
+	// Same flow, same SeqNum → same key (dedup must still engage).
+	if !bytes.Equal(r.buildDedupKey(flowA), r.buildDedupKey(append([]byte(nil), flowA...))) {
+		t.Error("identical frames must share a dedup key")
 	}
 }
 
@@ -81,9 +109,10 @@ func TestRetransmit_DedupSuppresses(t *testing.T) {
 	if err := r.Retransmit(raw, [32]byte{}); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	// Second call with same SeqNum: SET NX returns false → returns nil early.
-	if err := r.Retransmit(raw, [32]byte{}); err != nil {
-		t.Errorf("dedup second: %v", err)
+	// Second call with the same (HashKey, SeqNum): SET NX returns false, and the
+	// suppression is reported distinctly so the caller cannot ACK it as a send.
+	if err := r.Retransmit(raw, [32]byte{}); !errors.Is(err, ErrDedupSuppressed) {
+		t.Errorf("dedup second: err = %v, want ErrDedupSuppressed", err)
 	}
 }
 

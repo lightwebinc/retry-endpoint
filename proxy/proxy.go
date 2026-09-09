@@ -19,6 +19,7 @@ package proxy
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -28,6 +29,7 @@ import (
 	"github.com/lightwebinc/shard-common/frame"
 
 	"github.com/lightwebinc/retry-endpoint/metrics"
+	"github.com/lightwebinc/retry-endpoint/retransmit"
 )
 
 const (
@@ -252,7 +254,11 @@ func (c *Client) recover(ctx context.Context, j job) {
 		if c.cfg.Multicast {
 			var txID [32]byte
 			copy(txID[:], raw[8:40])
-			if err := c.cfg.Retrans.Retransmit(raw, txID); err != nil {
+			if err := c.cfg.Retrans.Retransmit(raw, txID); errors.Is(err, retransmit.ErrDedupSuppressed) {
+				// A sibling already re-injected this frame downstream; the
+				// recovery still succeeded, so this is not a warning.
+				c.log.Debug("proxy retransmit suppressed by dedup")
+			} else if err != nil {
 				c.log.Warn("proxy retransmit error", "err", err)
 			} else if c.cfg.Rec != nil {
 				c.cfg.Rec.Retransmit()
