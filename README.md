@@ -20,7 +20,7 @@ no multicast join and no shared data-port bind at all. See
 [Configuration](docs/configuration.md) for the fail-closed rules.
 
 ```
-shard-proxy ──multicast──▶ FF05::<shard>:9001
+shard-proxy ──multicast──▶ FF05::B:<shard>:9001
                                          │
                           ┌──────────────┤
                           │              │
@@ -37,7 +37,6 @@ shard-proxy ──multicast──▶ FF05::<shard>:9001
 - [Configuration](docs/configuration.md) — all flags, environment variables, defaults, deployment examples
 - [Unified Logging Plan](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md) — `-log-format json`, `host.inventory`, `-trace-sampling`, runtime `/loglevel`
 - [BRC-126 — Retransmission Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md)
-- [NACK Retransmission Flow](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/nack-retransmission-flow.md)
 - [BRC-124 Frame Format](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-124-frame-format.md)
 
 ## Dependencies
@@ -47,8 +46,10 @@ shard-proxy ──multicast──▶ FF05::<shard>:9001
 
 ## Requirements
 
-- Go 1.25 or later
-- Linux (any modern kernel; `SO_REUSEADDR` cross-EUID co-bind)
+- Go 1.26.2 or later (the `go.mod` floor)
+- Linux (any modern kernel; `SO_REUSEADDR` cross-EUID co-bind) or FreeBSD
+  (`SO_REUSEPORT` co-bind, which requires the co-resident listener to run as
+  the **same** uid — FreeBSD has no cross-EUID share)
 - IPv6 enabled on the multicast fabric interface
 - Multicast routing configured for the same scope as proxy and listeners
 
@@ -122,7 +123,7 @@ environment variables / CLI flags.
 A Kubernetes Helm chart is published from a dedicated chart repository:
 
 - Repository: [`lightwebinc/retry-endpoint-helm`](https://github.com/lightwebinc/retry-endpoint-helm)
-- OCI (the only published form): `helm install retry-node-1 oci://ghcr.io/lightwebinc/charts/retry-endpoint --version 0.5.1`
+- OCI (the only published form): `helm install retry-node-1 oci://ghcr.io/lightwebinc/charts/retry-endpoint` (add `--version` to pin a released chart)
 
 `config.nackAddr` is effectively required — the chart emits a `helm.sh/chart-warnings` annotation when empty. The chart does **not** bundle a Redis subchart; operators install Redis separately when `config.cacheBackend=redis`. See the chart README for the full reference.
 

@@ -21,7 +21,7 @@ priority-sorted registry without static configuration (BRC-126).
 BSV senders
    │
    ▼
-shard-proxy  ──UDP multicast──▶ FF05::<shard>:9001
+shard-proxy  ──UDP multicast──▶ FF05::B:<shard>:9001
                                               │
               ┌───────────────────────────────┤
               │                               │
@@ -212,7 +212,15 @@ for fabric prerequisites (PIM-SSM, MLDv2, raised `mld_max_msf`).
 
 A single goroutine opens a UDP socket with `SO_REUSEADDR` on the configured
 listen port, joins all `NumGroups` shard groups, and writes each received frame to
-the cache with the configured TTL. `SO_REUSEADDR` (not `SO_REUSEPORT`) is the
+the cache with the configured TTL. Group memberships are re-asserted every 30 s
+for the life of the socket: a kernel membership can be lost underneath a running
+socket when the forwarding state it depends on changes (a multicast RPF move
+after a routing re-convergence, a forwarder restart, an interface rebuild) with
+nothing reported to the process — `recvfrom` simply stops producing frames for
+that source while the process looks healthy — so the periodic re-join is what
+keeps a per-source counter from silently freezing. Only the first join is fatal
+on error; re-assert refusals (the common "already a member" case) are logged at
+debug. `SO_REUSEADDR` (not `SO_REUSEPORT`) is the
 cross-EUID co-bind path: it lets this socket co-exist with a co-resident
 shard-listener running under a **different** user on a collapsed node — both
 receive the same multicast group.
@@ -313,14 +321,20 @@ uniquely identify every frame within a flow. No secondary index is needed.
 `[nackBindAddr]:nack-port`. Each worker:
 
 1. Reads one 64-byte NACK datagram (BRC-126 wire format).
-2. Applies four-tier rate limiting (per-IP, per-SeqNum, per-chain pre-lookup;
+2. Applies four-tier rate limiting (per-IP, per-`(HashKey, SeqNum)`, per-chain pre-lookup;
    per-group post-lookup). Throttled requests are answered with THROTTLED when
    `-rl-throttle-response` is set (sequence/chain/group tiers; the IP flood
    tier never answers) and dropped silently otherwise.
 3. Looks up the frame in the cache by `HashKey ∥ StartSeq` (16-byte key).
 4. On **hit**: dispatches `retransmit.Send`, then sends a 16-byte ACK (unless
    `-suppress-ack`) whose Flags record what was dispatched (`0x01` multicast,
-   `0x02` unicast).
+   `0x02` unicast). ACK means "retransmit dispatched": when a send was attempted
+   and nothing went on the wire — the multicast copy was dedup-suppressed because
+   a sibling already claimed the frame, or the unicast write failed — the
+   corresponding flag stays clear, and with no flag set at all **no ACK is
+   sent**, so the requester escalates instead of closing a gap nothing repaired.
+   (An endpoint configured with neither send mode still answers a bare ACK: that
+   is the deliberate "answer without repairing" posture.)
 5. On **miss**: sends a 16-byte MISS (unless `-suppress-miss`). The listener
    escalates to the next endpoint immediately.
 
@@ -361,7 +375,7 @@ together via the ADVERT beacon flags:
 
 | Mode      | Beacon flag               | Config flag                                | Behaviour                                                          |
 | --------- | ------------------------- | ------------------------------------------ | ------------------------------------------------------------------ |
-| Multicast | `FlagMulticastRetransmit` | `-beacon-flags-multicast` (default `true`) | Frame sent to `FF05::<shard>:egress-port` on each egress interface |
+| Multicast | `FlagMulticastRetransmit` | `-beacon-flags-multicast` (default `true`) | Frame sent to `FF05::B:<shard>:egress-port` on each egress interface |
 | Unicast   | `FlagUnicastRetransmit`   | `-beacon-flags-unicast` (default `false`)  | Frame sent directly back to the NACK sender's address              |
 
 ### Multicast retransmit
@@ -413,10 +427,15 @@ Both modes can fire for the same NACK when both beacon flags are set.
 
 ### Cross-instance deduplication
 
-When the Redis backend is in use, a `SET NX` with the `HashKey∥SeqNum` key and a
-`dedup-window` TTL (default 60 s) prevents two endpoints from both
-retransmitting the same frame. The first endpoint to acquire the key wins;
-others skip the send.
+When a shared dedup backend is in use (`-cache-backend redis` or `aerospike`,
+or `memory` with `-redis-addr` set for dedup only), a `SET NX` with the
+`HashKey∥SeqNum` key and a `dedup-window` TTL (default 60 s) prevents two
+endpoints from both retransmitting the same frame. The first endpoint to
+acquire the key wins; others skip the send (`ErrDedupSuppressed`, counted in
+`bre_retransmit_dedup_total`) and leave the multicast flag clear in their ACK —
+or send no ACK at all if nothing else was dispatched — so the requester never
+closes a gap on the strength of a sibling's copy (see the NACK server hit path
+above).
 
 ## Beacon discovery (BRC-126)
 
@@ -452,7 +471,7 @@ retransmit dispatched.
 | #   | Level                 | Algorithm      | Position    | Config flags                              |
 | --- | --------------------- | -------------- | ----------- | ----------------------------------------- |
 | 1   | Per source IP         | Token bucket   | Pre-lookup  | `-rl-ip-rate`, `-rl-ip-burst`             |
-| 2   | Per SeqNum            | Sliding window | Pre-lookup  | `-rl-sequence-max`, `-rl-sequence-window` |
+| 2   | Per (HashKey, SeqNum) | Sliding window | Pre-lookup  | `-rl-sequence-max`, `-rl-sequence-window` |
 | 3   | Per (srcIP, HashKey)  | Sliding window | Pre-lookup  | `-rl-chain-rate`, `-rl-chain-window`      |
 | 4   | Per (srcIP, groupIdx) | Token bucket   | Post-lookup | `-rl-group-rate`, `-rl-group-burst`       |
 
@@ -504,7 +523,7 @@ Protocol primitives are provided by
 
 ```
 shard-common/
-  frame/    BRC-12/BRC-124/BRC-128/BRC-131/BRC-132/BRC-134 wire format: Decode, Encode, constants
+  frame/    BRC-12/BRC-124/BRC-128/BRC-130/BRC-131/BRC-132/BRC-134/BRC-149 wire format: Decode, Encode, constants
   bundle/   BRC-142 coalescing bundle (FrameVer 0x08): Decode, IsBundle, header offsets
   shard/    txid → group index → IPv6 multicast address derivation;
             control group constants and GroupAddr

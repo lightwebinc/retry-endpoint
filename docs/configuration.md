@@ -219,6 +219,7 @@ listed default.
 | `-cache-ttl-block` / `CACHE_TTL_BLOCK` | `0x04` | BRC-131 block control | `10m` |
 | `-cache-ttl-subtree` / `CACHE_TTL_SUBTREE` | `0x05` | BRC-132 subtree data | `5m` |
 | `-cache-ttl-anchor` / `CACHE_TTL_ANCHOR` | `0x06` | BRC-134 anchor tx | `2m` |
+| `-cache-ttl-beef` / `CACHE_TTL_BEEF` | `0x09` | BRC-148/149 BEEF object | `60s` (own flag; outside the `CACHE_TTL` collapse) |
 | _(uses `-cache-ttl-tx`)_ | `0x08` | BRC-142 coalescing bundle | `60s` |
 
 BRC-142 bundles (FrameVer `0x08`) have no dedicated TTL flag: they are cached
@@ -230,8 +231,10 @@ Resolution order applied per frame type:
 2. else, explicit `CACHE_TTL` — overrides the differentiated default
 3. else, the differentiated default above
 
-All four values must be strictly positive; the process exits at startup
-if any resolves to zero or a negative duration.
+The four collapse-set values (tx, block, subtree, anchor) must be strictly
+positive; the process exits at startup if any resolves to zero or a negative
+duration. `-cache-ttl-beef` sits outside the collapse and is not checked by
+that validation.
 
 ### `-cache-max-keys` / `CACHE_MAX_KEYS` (default: `0`)
 
@@ -404,9 +407,14 @@ sustained rate before limiting kicks in.
 
 ### `-rl-sequence-max` / `RL_SEQUENCE_MAX` (default: `100`)
 
-Maximum number of requests for the same `SeqNum` value within
-`-rl-sequence-window`. Prevents a single stuck listener from flooding the
-server with repeated NACKs for the same gap.
+Maximum number of requests for the same `(HashKey, SeqNum)` pair — one flow's
+missing frame — within `-rl-sequence-window`. Prevents a single stuck listener
+from flooding the server with repeated NACKs for the same gap. The bucket is
+scoped to the flow, not the bare `SeqNum`: every flow's counter starts at 1,
+so a bare-`SeqNum` bucket would let a few junk NACKs for a low sequence number
+exhaust repair of that sequence for every flow the endpoint serves. A `HashKey`
+of `0` (unstamped frame) falls back to the bare `SeqNum`. The bucket map is
+bounded (100 000 keys; fully aged-out entries are swept on overflow).
 
 ### `-rl-sequence-window` / `RL_SEQUENCE_WINDOW` (default: `1m`)
 
