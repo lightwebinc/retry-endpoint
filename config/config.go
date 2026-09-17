@@ -520,6 +520,7 @@ func Load() (*Config, error) {
 		"cache-ttl-block":   c.CacheTTLBlock,
 		"cache-ttl-subtree": c.CacheTTLSubtree,
 		"cache-ttl-anchor":  c.CacheTTLAnchor,
+		"cache-ttl-beef":    c.CacheTTLBEEF,
 	} {
 		if ttl <= 0 {
 			return nil, fmt.Errorf("%s must be > 0, got %s", name, ttl)

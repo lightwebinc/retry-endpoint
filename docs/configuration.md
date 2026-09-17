@@ -231,10 +231,11 @@ Resolution order applied per frame type:
 2. else, explicit `CACHE_TTL` — overrides the differentiated default
 3. else, the differentiated default above
 
-The four collapse-set values (tx, block, subtree, anchor) must be strictly
-positive; the process exits at startup if any resolves to zero or a negative
-duration. `-cache-ttl-beef` sits outside the collapse and is not checked by
-that validation.
+Every per-FrameVer TTL — the four collapse-set values (tx, block, subtree,
+anchor) **and** `-cache-ttl-beef` — must be strictly positive; the process
+exits at startup if any resolves to zero or a negative duration.
+`-cache-ttl-beef` still sits outside the `CACHE_TTL` collapse (it is never
+overridden by it); only the positivity check is shared.
 
 ### `-cache-max-keys` / `CACHE_MAX_KEYS` (default: `0`)
 

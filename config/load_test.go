@@ -132,8 +132,20 @@ func TestLoad_CacheBackend(t *testing.T) {
 }
 
 func TestLoad_PerFrameVerTTLMustBePositive(t *testing.T) {
-	if _, err := loadWithArgs(t, withEgress(t, "-cache-ttl-tx=0")...); err == nil {
-		t.Error("cache-ttl-tx=0 should error")
+	// Every per-FrameVer TTL, including the BEEF plane's: a zero or negative
+	// TTL caches nothing, so the endpoint answers MISS for every NACK on that
+	// class while looking healthy.
+	for _, flag := range []string{
+		"-cache-ttl-tx=0",
+		"-cache-ttl-block=0",
+		"-cache-ttl-subtree=0",
+		"-cache-ttl-anchor=0",
+		"-cache-ttl-beef=0",
+		"-cache-ttl-beef=-1s",
+	} {
+		if _, err := loadWithArgs(t, withEgress(t, flag)...); err == nil {
+			t.Errorf("%s should error", flag)
+		}
 	}
 }
 
