@@ -12,7 +12,7 @@ import "golang.org/x/sys/unix"
 // SO_REUSEPORT set on BOTH sockets AND both processes running as the SAME uid;
 // SO_REUSEADDR alone fails even same-user, and SO_REUSEPORT fails cross-user.
 // So this half is necessary but not sufficient: the deployment must also give
-// retry-endpoint and shard-listener-1bsv one uid on FreeBSD.
+// retry-endpoint and the co-resident listener one uid on FreeBSD.
 //
 // Without it the listener crash-loops on `bind [::]::9001: address already in
 // use` while this process holds the port, with no other symptom.
