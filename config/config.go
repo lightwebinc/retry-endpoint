@@ -176,7 +176,15 @@ type Config struct {
 	TraceSampling float64       // 0..1 head sampling ratio; 0 disables tracing
 
 	// Beacon (BRC-126 endpoint discovery)
-	BeaconEnabled        bool
+	BeaconEnabled bool
+
+	// ControlGroupCompat selects which multicast prefix the control-plane
+	// groups (BRC-129 index 0xFFFD: ADVERT beacon + BRC-139 manifest) are
+	// derived from: "asm-only" | "both" | "derived". See
+	// config/controlgroup.go for the rollout order. Senders default to
+	// "asm-only" so upgrading this binary never moves the wire out from
+	// under an un-upgraded listener.
+	ControlGroupCompat   string
 	BeaconTier           uint          // 0 = closest to source
 	BeaconPreference     uint          // weighting within tier; higher = preferred
 	BeaconInterval       time.Duration // ADVERT cadence
@@ -354,6 +362,12 @@ func Load() (*Config, error) {
 		"beacon multicast interval")
 	flag.StringVar(&c.BeaconScope, "beacon-scope", envStr("BEACON_SCOPE", "site"),
 		"beacon scope: site | org | global | both | all")
+	flag.StringVar(&c.ControlGroupCompat, "control-group-compat", envStr("CONTROL_GROUP_COMPAT", ControlGroupASMOnly),
+		"prefix for the BRC-129 0xFFFD control groups this endpoint advertises into: "+
+			"'asm-only' (default, sender-safe) = always the any-source FF0x form; "+
+			"'both' = advertise into FF0x and the -source-mode-derived FF3x; "+
+			"'derived' = BRC-126/129 conformant, FF3x under -source-mode=ssm. "+
+			"Move senders off 'asm-only' only after every listener runs 'both' or 'derived'")
 	flag.BoolVar(&c.BeaconFlagsUnicast, "beacon-flags-unicast", envBool("BEACON_FLAGS_UNICAST", false),
 		"advertise unicast retransmit support")
 	flag.BoolVar(&c.BeaconFlagsMulticast, "beacon-flags-multicast", envBool("BEACON_FLAGS_MULTICAST", true),
@@ -588,6 +602,23 @@ func Load() (*Config, error) {
 		c.BeaconScopeByte = 0xFF
 	default:
 		return nil, fmt.Errorf("beacon-scope must be one of site|org|global|both|all, got %q", c.BeaconScope)
+	}
+
+	// Control-plane group prefix (BRC-126 §Beacon Scopes / BRC-129 §Source
+	// Mode and Address Range). See config/controlgroup.go for the flag-day
+	// rollout order; the sender default is "asm-only" so upgrading this
+	// binary alone can never strand an un-upgraded listener.
+	c.ControlGroupCompat = strings.ToLower(strings.TrimSpace(c.ControlGroupCompat))
+	switch c.ControlGroupCompat {
+	case ControlGroupASMOnly, ControlGroupBoth, ControlGroupDerived:
+	default:
+		return nil, fmt.Errorf("invalid -control-group-compat %q (%s)",
+			c.ControlGroupCompat, strings.Join(ControlGroupCompatValues, "|"))
+	}
+	if c.BeaconEnabled {
+		if _, err := c.BeaconGroupPrefixes(); err != nil {
+			return nil, fmt.Errorf("beacon group: %w", err)
+		}
 	}
 	// 255 (0xFF) is the sentinel a listener assigns to statically configured
 	// endpoints so they sort last; advertising it would make this endpoint

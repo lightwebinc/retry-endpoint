@@ -43,6 +43,19 @@ type Config struct {
 	GroupID    uint16         // IANA group-id occupying bytes 12–13 (default 0x000B)
 	Iface      *net.Interface // outgoing multicast interface
 	BindSource net.IP         // optional IPv6 to bind for beacon egress; required when SSM listeners pre-declare this retry-endpoint in sources.bootstrap.beacon
+
+	// GroupPrefixes are the upper-16-bit multicast prefixes to advertise
+	// into, already resolved from (-control-group-compat, -source-mode,
+	// -beacon-scope) by config.Config.BeaconGroupPrefixes. BRC-126 and
+	// BRC-129 require FF3x under SSM (FF35 site, FF3E global), not the
+	// any-source FF0x form; carrying the resolved list here keeps that
+	// decision in one place (config/controlgroup.go) instead of a scope
+	// table in this package.
+	//
+	// Empty falls back to the pre-fix derivation — the any-source
+	// prefixes implied by Scope — so a caller that has not been updated
+	// keeps its old wire rather than silently changing group.
+	GroupPrefixes []uint16
 }
 
 // Sender periodically multicasts ADVERT beacons.
@@ -113,12 +126,20 @@ func (s *Sender) Run(ctx context.Context) error {
 		}
 	}()
 
+	// The group list is logged in full, not just counted: on the BRC-126/129
+	// flag day "which group am I advertising into" is the question an
+	// operator has to answer from the logs, because landing on the wrong one
+	// produces no error at either end.
+	dests := make([]string, 0, len(groups))
+	for _, grp := range groups {
+		dests = append(dests, grp.String())
+	}
 	s.log.Info("beacon sender started",
 		"interval", s.cfg.Interval,
 		"scope", s.cfg.Scope,
 		"tier", s.cfg.Tier,
 		"preference", s.cfg.Preference,
-		"groups", len(groups),
+		"groups", dests,
 	)
 
 	ticker := time.NewTicker(s.cfg.Interval)
@@ -172,22 +193,46 @@ func (s *Sender) buildADVERT() []byte {
 	return buf
 }
 
+// beaconGroups returns the destinations this endpoint advertises into: one
+// per resolved multicast prefix at the BRC-126 beacon port.
+//
+// The prefixes are NOT derived here. BRC-126 §Beacon Scopes and BRC-129
+// §Source Mode and Address Range make the control-plane group address a
+// function of the source mode as well as the scope — FF35::B:FFFD at site
+// scope under SSM, not FF05::B:FFFD — and this package has no view of
+// -source-mode. config.Config.BeaconGroupPrefixes resolves it (reusing
+// shard.Prefix, the same helper the data plane uses) and hands the answer
+// down in Config.GroupPrefixes.
 func (s *Sender) beaconGroups() []*net.UDPAddr {
 	beaconPort := 9300 // default beacon port
-	var groups []*net.UDPAddr
 
-	if s.cfg.Scope == 0x05 || s.cfg.Scope == 0xFF {
-		ip := shard.GroupAddr(0xFF05, s.cfg.GroupID, shard.GroupBeacon)
-		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
-	}
-	if s.cfg.Scope == 0x08 || s.cfg.Scope == 0xFF {
-		ip := shard.GroupAddr(0xFF08, s.cfg.GroupID, shard.GroupBeacon)
-		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
-	}
-	if s.cfg.Scope == 0x0E || s.cfg.Scope == 0xFF {
-		ip := shard.GroupAddr(0xFF0E, s.cfg.GroupID, shard.GroupBeacon)
-		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
+	prefixes := s.cfg.GroupPrefixes
+	if len(prefixes) == 0 {
+		prefixes = legacyASMPrefixes(s.cfg.Scope)
 	}
 
+	groups := make([]*net.UDPAddr, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		ip := shard.GroupAddr(prefix, s.cfg.GroupID, shard.GroupBeacon)
+		groups = append(groups, &net.UDPAddr{IP: ip, Port: beaconPort})
+	}
 	return groups
+}
+
+// legacyASMPrefixes is the pre-fix derivation: the any-source FF0x prefixes
+// implied by the ADVERT scope byte, ignoring the source mode. It survives
+// only as the fallback for a Config with no GroupPrefixes set, so that an
+// un-updated caller keeps the exact wire it had.
+func legacyASMPrefixes(scope byte) []uint16 {
+	var out []uint16
+	if scope == 0x05 || scope == 0xFF {
+		out = append(out, 0xFF05)
+	}
+	if scope == 0x08 || scope == 0xFF {
+		out = append(out, 0xFF08)
+	}
+	if scope == 0x0E || scope == 0xFF {
+		out = append(out, 0xFF0E)
+	}
+	return out
 }

@@ -443,12 +443,23 @@ The beacon sender runs as a separate goroutine and fires every `beacon-interval`
 (default 60 s). It sends a 56-byte ADVERT datagram to the configured beacon
 multicast group:
 
-| `-beacon-scope` | Group(s)         | Purpose                                        |
-| --------------- | ---------------- | ---------------------------------------------- |
-| `site`          | `FF05::B:FFFD`   | Intra-site listener discovery                  |
-| `org`           | `FF08::B:FFFD`   | Organisation-wide discovery                    |
-| `global`        | `FF0E::B:FFFD`   | Inter-AS discovery via MP-BGP MVPN             |
-| `both` / `all`  | all three groups | Mixed deployments (three ADVERTs per interval) |
+| `-beacon-scope` | ASM group(s)     | SSM group(s)     | Purpose                                        |
+| --------------- | ---------------- | ---------------- | ---------------------------------------------- |
+| `site`          | `FF05::B:FFFD`   | `FF35::B:FFFD`   | Intra-site listener discovery                  |
+| `org`           | `FF08::B:FFFD`   | —                | Organisation-wide discovery                    |
+| `global`        | `FF0E::B:FFFD`   | `FF3E::B:FFFD`   | Inter-AS discovery via MP-BGP MVPN             |
+| `both` / `all`  | all three groups | —                | Mixed deployments (three ADVERTs per interval) |
+
+The group address is a function of the source mode as well as the scope, per
+BRC-126 §Beacon Scopes and BRC-129 §Source Mode and Address Range: under SSM
+the control-plane groups take the source-specific `FF3x` prefix, exactly as
+the data-plane shard groups do. Which form this endpoint advertises into is
+selected by `-control-group-compat`, whose default (`asm-only`) keeps the
+pre-fix wire so an un-upgraded listener still hears it. See
+[configuration.md](./configuration.md#-control-group-compat--control_group_compat-default-asm-only)
+for the rollout order; moving a sender to the source-specific group before
+every listener has joined it stops discovery silently. BRC-129 has no SSM
+control group at org scope, so `org` / `both` / `all` are ASM-only.
 
 The ADVERT carries the endpoint's NACKAddr, NACKPort, Tier, Preference, Flags,
 and a stable InstanceID (CRC32c hash of the hostname). Listeners upsert endpoints
@@ -457,7 +468,8 @@ refreshed within `3 × beacon-interval` are evicted automatically.
 
 **Interface binding:** The beacon socket sets `IPV6_MULTICAST_IF` explicitly after
 `net.DialUDP` to force datagrams out the fabric NIC (`MC_IFACE`). Without this the
-kernel may route `FF05::` via the management interface (lower-metric default route).
+kernel may route `FF05::` (or `FF35::`) via the management interface
+(lower-metric default route).
 
 ## Rate limiting
 

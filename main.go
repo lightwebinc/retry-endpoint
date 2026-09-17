@@ -602,19 +602,35 @@ func run() error {
 		if cfg.BindSource != "" {
 			bindSrc = net.ParseIP(cfg.BindSource)
 		}
-		beaconCfg := beacon.Config{
-			NACKAddr:   nackIP,
-			NACKPort:   uint16(cfg.NACKPort),
-			Tier:       uint8(cfg.BeaconTier),
-			Preference: uint8(cfg.BeaconPreference),
-			Interval:   cfg.BeaconInterval,
-			Scope:      cfg.BeaconScopeByte,
-			Flags:      flags,
-			InstanceID: hashInstanceID(host),
-			GroupID:    cfg.MCGroupID,
-			Iface:      beaconIface,
-			BindSource: bindSrc,
+		// BRC-126 §Beacon Scopes / BRC-129 §Source Mode: under SSM the
+		// beacon group takes the source-specific FF3x prefix, not the
+		// any-source FF0x one. -control-group-compat selects which; its
+		// default ("asm-only") keeps the pre-fix wire so an un-upgraded
+		// listener still hears this endpoint. Config.Load has already
+		// validated this.
+		beaconPrefixes, perr := cfg.BeaconGroupPrefixes()
+		if perr != nil {
+			return fmt.Errorf("beacon group: %w", perr)
 		}
+		beaconCfg := beacon.Config{
+			NACKAddr:      nackIP,
+			NACKPort:      uint16(cfg.NACKPort),
+			Tier:          uint8(cfg.BeaconTier),
+			Preference:    uint8(cfg.BeaconPreference),
+			Interval:      cfg.BeaconInterval,
+			Scope:         cfg.BeaconScopeByte,
+			Flags:         flags,
+			InstanceID:    hashInstanceID(host),
+			GroupID:       cfg.MCGroupID,
+			Iface:         beaconIface,
+			BindSource:    bindSrc,
+			GroupPrefixes: beaconPrefixes,
+		}
+		slog.Info("beacon groups resolved",
+			"control_group_compat", cfg.ControlGroupCompat,
+			"source_mode", cfg.SourceMode,
+			"beacon_scope", cfg.BeaconScope,
+			"groups", len(beaconPrefixes))
 		beaconSender := beacon.New(beaconCfg)
 		beaconSender.SetRecorder(rec)
 		wg.Add(1)

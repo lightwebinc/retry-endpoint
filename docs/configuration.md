@@ -510,17 +510,82 @@ seconds field). Listeners evict endpoints that have not sent an ADVERT within
 
 ### `-beacon-scope` / `BEACON_SCOPE` (default: `site`)
 
-Multicast scope for ADVERT datagrams.
+Multicast scope for ADVERT datagrams. The group address also depends on
+`-source-mode` and on `-control-group-compat` (below): per BRC-126 §Beacon
+Scopes and BRC-129 §Source Mode and Address Range, the control-plane groups
+take the source-specific `FF3x` prefix under SSM.
 
-| Value            | Group(s)         | Use case                                                       |
-| ---------------- | ---------------- | -------------------------------------------------------------- |
-| `site`           | `FF05::B:FFFD`   | All listeners on the local site                                |
-| `org`            | `FF08::B:FFFD`   | Organisation-wide discovery                                    |
-| `global`         | `FF0E::B:FFFD`   | Inter-AS via MP-BGP MVPN                                       |
-| `both` / `all`   | all three groups | Site + org + global simultaneously (three ADVERTs per interval) |
+| Value            | ASM group(s)     | SSM group(s)     | Use case                                                        |
+| ---------------- | ---------------- | ---------------- | --------------------------------------------------------------- |
+| `site`           | `FF05::B:FFFD`   | `FF35::B:FFFD`   | All listeners on the local site                                 |
+| `org`            | `FF08::B:FFFD`   | —                | Organisation-wide discovery                                     |
+| `global`         | `FF0E::B:FFFD`   | `FF3E::B:FFFD`   | Inter-AS via MP-BGP MVPN                                        |
+| `both` / `all`   | all three groups | —                | Site + org + global simultaneously (three ADVERTs per interval)  |
 
 `both` and `all` are synonyms: they set the ADVERT wire scope byte to `0xFF`
 and emit one ADVERT to each of the three groups per interval.
+
+BRC-129 tables an SSM control group at site and global scope only, so `org`
+— and therefore `both` / `all`, which cover it — has no source-specific
+form. With `-control-group-compat derived`, combining any of them with
+`-source-mode ssm` is a startup error rather than a silent fall back to
+`FF08`: use `-beacon-scope site` and/or a second instance at
+`-beacon-scope global`. With `asm-only` or `both` they keep working exactly
+as today (`both` at `all` scope adds `FF35` and `FF3E` and leaves `FF08`
+alone), so a binary upgrade at default settings can never fail to start.
+
+The ADVERT wire scope byte is unaffected: an ADVERT sent to `FF35::B:FFFD`
+still carries scope byte `0x05`. SSM changes the address, not the format.
+
+### `-control-group-compat` / `CONTROL_GROUP_COMPAT` (default: `asm-only`)
+
+Which multicast prefix the control-plane group at BRC-129 index `0xFFFD`
+— the beacon group this endpoint advertises into — is derived from.
+
+| Value | Advertises into |
+|-------|-----------------|
+| `asm-only` (default) | Always the any-source `FF0x` form, ignoring `-source-mode`. Pre-fix behaviour. |
+| `both` | Both the `FF0x` form and the `-source-mode`-derived form where one exists (one ADVERT to each per interval). |
+| `derived` | The `-source-mode`-derived form only: `FF3x` under `-source-mode ssm`. BRC-126/129 conformant. |
+
+Under `-source-mode asm` all three collapse to the same `FF0x` prefixes, so
+the flag does nothing in an ASM deployment.
+
+**This is a flag day.** Releases before this one always advertised into the
+any-source prefix, even under `-source-mode ssm` — while the data plane in
+the same process derived `FF3x` correctly. A listener joined to
+`FF35::B:FFFD` hears nothing from an endpoint still advertising into
+`FF05::B:FFFD`, and an ADVERT that lands on the wrong group raises no error
+anywhere: the symptom is that listeners' endpoint registries simply stay
+empty and every NACK falls back to the static seeds.
+
+The default is `asm-only` precisely so that upgrading retry endpoints is
+safe on its own: the binary changes, the wire does not.
+
+**Rollout order** — the other sender is `shard-manifest`; the receivers are
+`shard-listener` and `shard-proxy`:
+
+1. Roll every **receiver** (shard-listener, shard-proxy). Their default is
+   `both`, so they join the legacy and the conformant group together.
+2. Roll every **sender** (retry-endpoint, shard-manifest). Default
+   `asm-only`; the wire does not move.
+3. One converge sets the **senders** to `derived`. ADVERTs move to `FF3x`,
+   which every receiver from step 1 already joined.
+4. After a soak, one converge sets the **receivers** to `derived` to drop
+   the legacy join.
+
+Setting this endpoint to `derived` before step 1 has covered every listener
+is the one ordering that silently strands a peer. `both` is the escape hatch
+for a fleet that is knowingly mixed and does not want a second converge.
+
+Under `-source-mode ssm` a fabric's multicast routes and PIM/smcroute group
+ranges are usually derived from the source mode too, and so cover
+`ff35::/16` and `ff3e::/16` but not `ff05::/16`. The legacy leg of `both`
+therefore reaches only same-segment listeners on such a fabric — which is
+all it reached before this fix as well. Check that anything keyed on the
+group prefix rather than on `ff00::/8` — multicast routes, PIM/smcroute
+group ranges, MLD snooping filters, narrowed firewall rules — covers the SSM
+block before moving off `asm-only`.
 
 ### `-beacon-flags-multicast` / `BEACON_FLAGS_MULTICAST` (default: `true`)
 
