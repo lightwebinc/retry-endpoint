@@ -3,7 +3,7 @@ module github.com/lightwebinc/retry-endpoint
 go 1.26.2
 
 require (
-	github.com/alicebob/miniredis/v2 v2.38.0
+	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/lightwebinc/shard-common v0.20.0
 	github.com/prometheus/client_golang v1.24.1
 	go.opentelemetry.io/otel v1.44.0
@@ -12,8 +12,8 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/metric v1.44.0
-	golang.org/x/sys v0.47.0
-	golang.org/x/time v0.15.0
+	golang.org/x/sys v0.48.0
+	golang.org/x/time v0.16.0
 )
 
 require (
