@@ -801,7 +801,7 @@ retry-endpoint \
 
 Every flag documented in this file is exposed under `.config` in the corresponding Helm chart's `values.yaml`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
 
-Chart: [`lightwebinc/retry-endpoint-helm`](https://github.com/lightwebinc/retry-endpoint-helm) — `config.nackAddr` is effectively required; no Redis subchart bundled.
+Chart: [`charts/retry-endpoint`](https://github.com/lightwebinc/charts/tree/main/charts/retry-endpoint) — `config.nackAddr` is effectively required; no Redis subchart bundled.
 
 ## BRC-148 BEEF object plane
 
