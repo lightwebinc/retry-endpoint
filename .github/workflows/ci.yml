@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   ci:
-    uses: lightwebinc/ci/.github/workflows/go-dagger.yml@3f438e60ade351107a3d1601955ebbf34de8caf1 # v0.1.0
+    uses: lightwebinc/ci/.github/workflows/go-dagger.yml@192a5b5169fd635e191104c14631525bbcd5ec60 # v0.3.0
 
   # freebsd/amd64 is a real deployment target (the FreeBSD spines/edges) and this
   # repo carries a GOOS split — ingress/mcastall_linux.go vs
