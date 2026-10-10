@@ -35,7 +35,7 @@ shard-proxy ──multicast──▶ FF05::B:<shard>:9001
 
 - [Architecture](docs/architecture.md) — pipeline overview, ingress, cache, NACK server, retransmit, beacon, NACK bind address, package structure
 - [Configuration](docs/configuration.md) — all flags, environment variables, defaults, deployment examples
-- [Unified Logging Plan](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md) — `-log-format json`, `host.inventory`, `-trace-sampling`, runtime `/loglevel`
+- [Unified Component Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md) — `-log-format json`, `host.inventory`, `-trace-sampling`, runtime `/loglevel`
 - [BRC-126 — Retransmission Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md)
 - [BRC-124 Frame Format](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-124-frame-format.md)
 

@@ -670,7 +670,7 @@ Metric export interval for the OTLP push exporter. Ignored when
 Structured-log output: `text` (stderr, dev default) or `json` (one JSON object
 per line on stdout, for fleet aggregation). Every line carries the
 `service.{name,instance.id,version}` identity triple shared with OTLP metrics.
-See the [Unified Logging Plan](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md).
+See the [Unified Component Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md).
 
 ### `-log-level` / `LOG_LEVEL` (default: `info`)
 
