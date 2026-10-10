@@ -273,6 +273,13 @@ on the first `-egress-iface` is used.
 >
 > Set `-nack-addr` to the static fabric address to prevent this.
 
+**Required in production.** Listeners send NACKs to the advertised address and
+use a connected socket bound to it; with `[::]`, ACK/MISS responses may leave
+from a SLAAC source and are either discarded by the listener (source mismatch)
+or dropped by a firewall allow-list that holds only the advertised address.
+Either path silently breaks NACK recovery. See
+[`shard-listener/nack/nack.go`](https://github.com/lightwebinc/shard-listener/blob/main/nack/nack.go).
+
 ### `-suppress-ack` / `SUPPRESS_ACK` (default: `false`)
 
 Do not send 16-byte ACK responses after a successful cache hit and retransmit.

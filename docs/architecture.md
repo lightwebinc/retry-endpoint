@@ -89,14 +89,11 @@ All retry-endpoint group addresses (ingress join, ADVERT beacon, retransmit
 egress) derive from `-scope` + `-mc-group-id`, so a downstream deployment is
 configured purely by aligning those with the bridge's egress space:
 
-| Upstream listener (bridge)       | Downstream retry-endpoint           | Downstream consumer  |
-| -------------------------------- | ----------------------------------- | -------------------- |
-| `-mc-egress-enabled=true`        | —                                   | —                    |
-| `-strip-header=false`            | —                                   | —                    |
-| `-mc-egress-scope` = X           | `-scope` = X                        | `-scope` = X         |
-| `-mc-egress-group-id` = G_d      | `-mc-group-id` = G_d                | `-mc-group-id` = G_d |
-| `-mc-egress-port` = P            | `-listen-port`=P, `-egress-port`=P  | `-listen-port` = P   |
-| `-shard-bits` = B                | `-shard-bits` = B                   | `-shard-bits` = B    |
+set the downstream retry-endpoint's `-scope`, `-mc-group-id`, `-listen-port`,
+`-egress-port` and `-shard-bits` to the bridge listener's `-mc-egress-scope`,
+`-mc-egress-group-id`, `-mc-egress-port` and `-shard-bits` (the bridge also needs
+`-strip-header=false`). The listener-side flags are documented in
+[shard-listener: Multicast Egress](https://github.com/lightwebinc/shard-listener/blob/main/docs/configuration.md#multicast-egress-domain-bridging).
 
 Isolate the two domains — translate the group-id (`G_d ≠ Gᵤ`) or confine the
 bridge with `-mc-egress-hoplimit` / a distinct `-mc-egress-iface` — so

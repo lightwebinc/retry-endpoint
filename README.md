@@ -56,7 +56,11 @@ shard-proxy ──multicast──▶ FF05::B:<shard>:9001
 ## Build
 
 ```bash
-go build -o retry-endpoint .
+make build   # host go build
+make test    # unit tests (race detector)
+make lint    # vet + golangci-lint
+make ci      # full Dagger pipeline
+make help    # list targets
 ```
 
 ## Run
@@ -94,22 +98,7 @@ See [docs/configuration.md](docs/configuration.md) for all flags and environment
 
 ## NACK_ADDR (required in production)
 
-`NACK_ADDR` (or `--nack-addr`) **must** be set to the specific routable IPv6
-address that this endpoint advertises in beacons and that listeners send NACKs
-to.
-
-If left empty the kernel binds the NACK socket to `[::]` and the default
-source-address selection rules may pick a SLAAC address (e.g.
-`2001:db8::216:3eff:fe00:1`) for outgoing ACK responses. Listeners then either:
-
-- discard the ACK because they use a connected socket bound to the advertised
-  address (the SLAAC source does not match), or
-- drop the ACK at the firewall because the allow-list only contains the
-  advertised address.
-
-Either path silently breaks NACK recovery. See
-[`shard-listener/nack/nack.go`](https://github.com/lightwebinc/shard-listener/blob/main/nack/nack.go)
-and the SLAAC source-address-mismatch fix history.
+Set `-nack-addr` / `NACK_ADDR` to the advertised fabric address; see [Configuration](docs/configuration.md#-nack-addr--nack_addr-default-auto-detected).
 
 ## Container image
 
@@ -127,6 +116,10 @@ A Kubernetes Helm chart is published from a dedicated chart repository:
 
 `config.nackAddr` is effectively required — the chart emits a `helm.sh/chart-warnings` annotation when empty. The chart does **not** bundle a Redis subchart; operators install Redis separately when `config.cacheBackend=redis`. See the chart README for the full reference.
 
+## Releases
+
+Releases and release notes live on [GitHub Releases](https://github.com/lightwebinc/retry-endpoint/releases); there is no CHANGELOG.
+
 ## License
 
-See LICENSE file.
+See [LICENSE](LICENSE).
