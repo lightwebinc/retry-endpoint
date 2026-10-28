@@ -532,3 +532,32 @@ func TestIPv4FormsShareBuckets(t *testing.T) {
 		t.Error("a different address shared the chain bucket")
 	}
 }
+
+// A loss burst leaves keys behind that are idle yet below the size trigger.
+// They must still go once a window has passed since the last sweep, or the
+// collector rescans them for the life of the process; a key still in its
+// window survives the sweep, and the rebuilt map, with its decisions intact.
+func TestSlidingWindowSweepsIdleKeysAfterAWindow(t *testing.T) {
+	sec := int64(time.Second)
+	r := newSlidingWindowLimiter[seqKey](1, time.Second, 1000)
+	for i := 0; i < 500; i++ {
+		allowAt(r, seqKey{hashKey: 1, seqNum: uint64(i)}, sec/10)
+	}
+	live := seqKey{hashKey: 2, seqNum: 1}
+	allowAt(r, live, sec/2)
+	if n := len(r.keys); n != 501 {
+		t.Fatalf("map = %d keys before a window has passed, want 501", n)
+	}
+
+	now := sec/10 + sec + 1
+	allowAt(r, seqKey{hashKey: 2, seqNum: 2}, now)
+	if n := len(r.keys); n != 2 {
+		t.Fatalf("map = %d keys a window later, want 2 (the idle 500 swept)", n)
+	}
+	if r.peak != 2 {
+		t.Errorf("peak = %d, want 2: the sparse map was not rebuilt", r.peak)
+	}
+	if allowAt(r, live, now) {
+		t.Error("a key still in its window was admitted past its limit after the sweep")
+	}
+}

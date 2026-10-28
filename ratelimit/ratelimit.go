@@ -212,12 +212,14 @@ const logShrinkCap = 256
 // memory and self-heals: a key that has been quiet for a window is admitted
 // again at full capacity.
 type slidingWindowLimiter[K comparable] struct {
-	mu      sync.Mutex
-	keys    map[K]*eventLog
-	max     int
-	window  int64 // nanoseconds
-	maxKeys int   // map size at which aged-out keys are first swept
-	sweepAt int   // map size that triggers the next sweep
+	mu        sync.Mutex
+	keys      map[K]*eventLog
+	max       int
+	window    int64 // nanoseconds
+	maxKeys   int   // map size at which aged-out keys are first swept
+	sweepAt   int   // map size that triggers the next sweep
+	lastSweep int64 // monoNow of the last sweep
+	peak      int   // largest len(keys) since the map was last rebuilt
 }
 
 func newSlidingWindowLimiter[K comparable](max int, window time.Duration, maxKeys int) *slidingWindowLimiter[K] {
@@ -250,11 +252,20 @@ func (r *slidingWindowLimiter[K]) allowLocked(key K, now int64) bool {
 		// grow the map without limit for the life of the process. Sweeping
 		// keys whose window has fully aged out reclaims every key that is no
 		// longer rate-limiting anything.
-		if len(r.keys) >= r.sweepAt {
+		//
+		// The size trigger alone is not enough: a loss burst creates keys
+		// faster than they age out, so each sweep keeps most of them and
+		// doubles sweepAt, and once the burst ends the map can sit below
+		// sweepAt for good with every key idle. Those keys cost nothing per
+		// request but are rescanned by the garbage collector on every cycle,
+		// which made a long-running repair cache measurably slower. So a new
+		// key also sweeps once a window has passed since the last sweep.
+		if len(r.keys) >= r.sweepAt || now-r.lastSweep >= r.window {
 			r.evictExpiredLocked(now)
 		}
 		l = &eventLog{}
 		r.keys[key] = l
+		r.peak = max(r.peak, len(r.keys))
 	}
 	return l.allow(now, r.window, r.max)
 }
@@ -272,7 +283,18 @@ func (r *slidingWindowLimiter[K]) evictExpiredLocked(now int64) {
 			delete(r.keys, k)
 		}
 	}
+	// A map keeps its buckets after deletes, and the collector scans them on
+	// every cycle; once the live keys are a small fraction of the peak, move
+	// them to a map sized for them.
+	if n := len(r.keys); 4*n < r.peak {
+		m := make(map[K]*eventLog, n)
+		for k, l := range r.keys {
+			m[k] = l
+		}
+		r.keys, r.peak = m, n
+	}
 	r.sweepAt = max(r.maxKeys, 2*len(r.keys))
+	r.lastSweep = now
 }
 
 // eventLog is one key's admitted events as monotonic nanosecond timestamps in

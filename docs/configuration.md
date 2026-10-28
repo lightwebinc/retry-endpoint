@@ -435,7 +435,8 @@ scoped to the flow, not the bare `SeqNum`: every flow's counter starts at 1,
 so a bare-`SeqNum` bucket would let a few junk NACKs for a low sequence number
 exhaust repair of that sequence for every flow the endpoint serves. A `HashKey`
 of `0` (unstamped frame) falls back to the bare `SeqNum`. The bucket map is
-bounded (100 000 keys; fully aged-out entries are swept on overflow).
+bounded (100 000 keys; fully aged-out entries are swept on overflow, and at
+most a window after the last sweep, so a loss burst's keys do not outlive it).
 
 ### `-rl-sequence-window` / `RL_SEQUENCE_WINDOW` (default: `1m`)
 
@@ -448,7 +449,8 @@ Maximum NACK requests allowed within `-rl-chain-window` for a given
 carried in the NACK datagram (offset 8). A `HashKey` of `0` (unstamped frame)
 bypasses this tier entirely. Each pair stores only the NACKs it admitted within
 the window, so a high limit costs memory only when it is used. The pair map is
-bounded (100 000 pairs; fully aged-out pairs are swept on overflow).
+bounded (100 000 pairs; fully aged-out pairs are swept on overflow, and at most
+a window after the last sweep).
 
 ### `-rl-chain-window` / `RL_CHAIN_WINDOW` (default: `1m`)
 
