@@ -3,6 +3,7 @@ package ingress
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -72,5 +73,36 @@ func TestRun_CtxCancelExits(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not exit")
+	}
+}
+
+// Partition spreads groups round robin, trims to the group count, and keeps
+// every group exactly once: a group in two parts would cache its frames twice,
+// a group in none would leave them uncached.
+func TestPartitionGroups(t *testing.T) {
+	var groups []*net.UDPAddr
+	for i := 0; i < 7; i++ {
+		groups = append(groups, &net.UDPAddr{IP: net.ParseIP(fmt.Sprintf("ff05::%x", i+1)), Port: 9001})
+	}
+	for _, n := range []int{0, 1, 3, 4, 7, 20} {
+		parts := Partition(groups, n)
+		want := min(max(n, 1), len(groups))
+		if len(parts) != want {
+			t.Fatalf("n=%d: %d parts, want %d", n, len(parts), want)
+		}
+		seen := map[string]int{}
+		for _, p := range parts {
+			if len(p) == 0 {
+				t.Fatalf("n=%d: empty part", n)
+			}
+			for _, g := range p {
+				seen[g.IP.String()]++
+			}
+		}
+		for _, g := range groups {
+			if seen[g.IP.String()] != 1 {
+				t.Fatalf("n=%d: group %s in %d parts", n, g.IP, seen[g.IP.String()])
+			}
+		}
 	}
 }

@@ -162,7 +162,7 @@ type Config struct {
 	RLGroupBurst     int           // Burst size per (srcIP, groupIdx)
 
 	// Runtime
-	NumWorkers   int           // Worker goroutines for multicast ingress (always 1)
+	NumWorkers   int           // Worker goroutines for multicast ingress (-ingress-workers)
 	Debug        bool          // Enable per-packet debug logging
 	DrainTimeout time.Duration // Pre-drain delay before closing sockets
 
@@ -260,6 +260,8 @@ func Load() (*Config, error) {
 		"NACK listen port")
 	flag.IntVar(&c.NACKWorkers, "nack-workers", envInt("NACK_WORKERS", runtime.NumCPU()),
 		"NACK worker goroutines")
+	flag.IntVar(&c.NumWorkers, "ingress-workers", envInt("INGRESS_WORKERS", 1),
+		"multicast ingress workers: each joins every Nth group on its own socket, so the cache's receive path scales across cores (one worker carries about 100k datagrams/s). More workers than groups are trimmed to the group count")
 
 	egressFlag := flag.String("egress-iface", envStr("EGRESS_IFACE", "eth0"),
 		"comma-separated NIC names for multicast egress")
@@ -541,9 +543,14 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Ingress is always single worker (multicast is delivered to every bound
-	// socket, so multiple workers would duplicate each cached frame).
-	c.NumWorkers = 1
+	// Ingress workers partition the groups: each socket joins every Nth group
+	// and, with IPV6_MULTICAST_ALL off (Linux), receives only those, so no frame
+	// is cached twice. Elsewhere multicast is delivered to every socket bound to
+	// the port, and several workers WOULD duplicate each frame, so they stay at
+	// one.
+	if c.NumWorkers < 1 || runtime.GOOS != "linux" {
+		c.NumWorkers = 1
+	}
 
 	// Default NACK workers to NumCPU if set to zero.
 	if c.NACKWorkers <= 0 {

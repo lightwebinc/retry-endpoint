@@ -450,14 +450,25 @@ func run() error {
 		srv.SetProxy(proxyClient)
 	}
 
-	// Build ingress worker.
-	ing := ingress.New(mcIface, cfg.ListenPort, groups, c, rec, ingress.TTLConfig{
+	// Build the ingress workers: each joins every Nth group (-ingress-workers),
+	// so the receive path scales across cores. Worker 0 also serves the tee.
+	ttls := ingress.TTLConfig{
 		Tx:      cfg.CacheTTLTx,
 		Block:   cfg.CacheTTLBlock,
 		Subtree: cfg.CacheTTLSubtree,
 		Anchor:  cfg.CacheTTLAnchor,
 		BEEF:    cfg.CacheTTLBEEF,
-	}, cfg.Debug)
+	}
+	parts := ingress.Partition(groups, cfg.NumWorkers)
+	ings := make([]*ingress.Worker, len(parts))
+	for i, gs := range parts {
+		ings[i] = ingress.New(mcIface, cfg.ListenPort, gs, c, rec, ttls, cfg.Debug)
+	}
+	ing := ings[0]
+	rec.SetWorkers(len(ings))
+	if len(ings) > 1 {
+		slog.Info("multicast ingress partitioned", "workers", len(ings), "groups", len(groups))
+	}
 
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -480,7 +491,9 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("ssm bootstrap: %w", err)
 		}
-		ing.SetGroupSources(gs)
+		for _, w := range ings {
+			w.SetGroupSources(gs)
+		}
 		// Pre-create the per-source cache counters for every joined source
 		// (metrics.PreCreateSources contract); the roster already excludes
 		// this node's own source.
@@ -535,17 +548,19 @@ func run() error {
 	// (proxy tee) or unjoined-band (listener tee) coverage.
 	fatalCh := make(chan error, 1)
 	if cfg.MCJoinEnabled {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := ing.Run(ctx); err != nil && ctx.Err() == nil {
-				slog.Error("ingress exited with error", "err", err)
-				select {
-				case fatalCh <- fmt.Errorf("ingress: %w", err):
-				default:
+		for _, w := range ings {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := w.Run(ctx); err != nil && ctx.Err() == nil {
+					slog.Error("ingress exited with error", "err", err)
+					select {
+					case fatalCh <- fmt.Errorf("ingress: %w", err):
+					default:
+					}
 				}
-			}
-		}()
+			}()
+		}
 	} else {
 		slog.Info("multicast join disabled: tee-only ingest", "tee_listen", cfg.TeeListen.String())
 	}

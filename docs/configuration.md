@@ -16,6 +16,16 @@ interface the multicast fabric is reachable on.
 
 UDP port for multicast frame receive. Must match the proxy's `-egress-port`.
 
+### `-ingress-workers` / `INGRESS_WORKERS` (default: `1`)
+
+Multicast receive workers. Each worker joins every Nth group on its own socket
+and, with `IPV6_MULTICAST_ALL` off, receives only those groups, so no frame is
+cached twice. One worker carries about 100k datagrams per second (measured with
+9 KB bundled datagrams, about 1.2M transactions per second); beyond that, raise
+this to the number of shard groups. Values above the group count are trimmed to
+it. Linux only: elsewhere multicast reaches every socket bound to the port, so
+the setting stays at 1.
+
 ### `-tee-listen` / `TEE_LISTEN` (default: empty = disabled)
 
 IPv6 loopback `host:port` literal (e.g. `[::1]:9002`) for the dedicated
@@ -240,8 +250,11 @@ overridden by it); only the positivity check is shared.
 ### `-cache-max-keys` / `CACHE_MAX_KEYS` (default: `0`)
 
 Maximum number of keys in the in-memory cache (0 = no limit). Ignored when
-`-cache-backend redis`. When the limit is reached, least-recently-used entries
-are evicted.
+`-cache-backend redis`. The cap is enforced per shard (64 shards). When a shard
+is full, expired entries go first, then the entry closest to its expiry, so a
+frame a pending repair may still need is never evicted while an older one
+remains. Expired entries are removed within about 250 ms of their deadline, so
+the in-memory store holds about rate × (TTL + 0.25 s) frames.
 
 ---
 
@@ -433,7 +446,9 @@ Sliding window duration for the per-`SeqNum` counter.
 Maximum NACK requests allowed within `-rl-chain-window` for a given
 `(srcIP, HashKey)` pair. `HashKey` is the stable per-flow XXH64 identifier
 carried in the NACK datagram (offset 8). A `HashKey` of `0` (unstamped frame)
-bypasses this tier entirely.
+bypasses this tier entirely. Each pair stores only the NACKs it admitted within
+the window, so a high limit costs memory only when it is used. The pair map is
+bounded (100 000 pairs; fully aged-out pairs are swept on overflow).
 
 ### `-rl-chain-window` / `RL_CHAIN_WINDOW` (default: `1m`)
 

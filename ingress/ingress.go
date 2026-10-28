@@ -74,7 +74,24 @@ type TTLConfig struct {
 // manifest-derived publisher union.
 type GroupSources map[netip.Addr][]netip.Addr
 
-// Worker is the single multicast receive goroutine.
+// Partition splits groups across n ingress workers, every nth group to each,
+// so data groups spread evenly. It never returns more parts than groups, and
+// always at least one.
+func Partition(groups []*net.UDPAddr, n int) [][]*net.UDPAddr {
+	if n > len(groups) {
+		n = len(groups)
+	}
+	if n < 1 {
+		return [][]*net.UDPAddr{groups}
+	}
+	out := make([][]*net.UDPAddr, n)
+	for i, g := range groups {
+		out[i%n] = append(out[i%n], g)
+	}
+	return out
+}
+
+// Worker is one multicast receive goroutine over its share of the groups.
 type Worker struct {
 	iface   *net.Interface
 	port    int

@@ -53,7 +53,8 @@ func startTee(t *testing.T, w *Worker) (netip.AddrPort, context.CancelFunc) {
 		t.Cleanup(func() {
 			cancel()
 			select {
-			case <-errCh:
+			case err := <-errCh:
+				_ = err // any exit after cancel will do; only that it exits matters
 			case <-time.After(2 * time.Second):
 				t.Error("RunTee did not exit on ctx cancel")
 			}

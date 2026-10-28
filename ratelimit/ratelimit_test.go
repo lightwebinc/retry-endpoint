@@ -1,7 +1,10 @@
 package ratelimit
 
 import (
+	"math/rand/v2"
 	"net"
+	"runtime"
+	"slices"
 	"testing"
 	"time"
 )
@@ -324,19 +327,208 @@ func TestSequenceTierIsScopedPerFlow(t *testing.T) {
 // The sequence map is keyed by unauthenticated NACK fields, so it must not grow
 // without bound: entries whose window has fully aged out are swept.
 func TestSequenceLimiterEvictsExpiredKeys(t *testing.T) {
-	sl := newSequenceLimiter(1, 10*time.Millisecond)
+	sl := newSlidingWindowLimiter[seqKey](1, 10*time.Millisecond, maxWindowKeys)
 	for i := 0; i < 1000; i++ {
-		sl.Allow(uint64(i), uint64(i))
+		sl.Allow(seqKey{hashKey: uint64(i), seqNum: uint64(i)})
 	}
-	if len(sl.seqs) != 1000 {
-		t.Fatalf("pre-eviction size = %d, want 1000", len(sl.seqs))
+	if len(sl.keys) != 1000 {
+		t.Fatalf("pre-eviction size = %d, want 1000", len(sl.keys))
 	}
 	time.Sleep(20 * time.Millisecond)
 	sl.mu.Lock()
-	sl.evictExpiredLocked(time.Now())
-	n := len(sl.seqs)
+	sl.evictExpiredLocked(monoNow())
+	n := len(sl.keys)
 	sl.mu.Unlock()
 	if n != 0 {
 		t.Errorf("expired keys survived eviction: %d remain", n)
+	}
+}
+
+// allowAt is Allow on a synthetic clock. Calls for one key must not go back
+// in time, as with the real clock read under the lock.
+func allowAt[K comparable](r *slidingWindowLimiter[K], key K, now int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.allowLocked(key, now)
+}
+
+// allowChainAt is AllowChain on a synthetic clock, for the benchmarks.
+func allowChainAt(l *Limiter, ip net.IP, hashKey uint64, now int64) bool {
+	return allowAt(l.chainLimiter, chainKey{ip: ipKey(ip), hashKey: hashKey}, now)
+}
+
+// The event log must decide exactly as filtering and counting every stored
+// timestamp does: at most limit events per key in any window, re-admitting as
+// events age out.
+func TestSlidingWindowMatchesRescan(t *testing.T) {
+	const window = 1000
+	for _, limit := range []int{0, 1, 3, 50, 1000} {
+		r := newSlidingWindowLimiter[int](limit, window, maxWindowKeys)
+		rng := rand.New(rand.NewPCG(uint64(limit), 7))
+		var live []int64 // the rescan's own record of admitted events
+		var now int64
+		for i := 0; i < 50_000; i++ {
+			// Alternate phases near the limit and well under it, so the log
+			// both fills and drains far below its peak.
+			spread := int64(2)
+			if i/5000%2 == 1 {
+				spread = 20
+			}
+			switch n := rng.IntN(1000); {
+			case n == 0: // idle past a whole window
+				now += window + rng.Int64N(window)
+			case n < 100: // same instant
+			default:
+				now += rng.Int64N(spread*window/int64(limit+1) + 1)
+			}
+			live = slices.DeleteFunc(live, func(ts int64) bool { return ts <= now-window })
+			want := len(live) < limit
+			if want {
+				live = append(live, now)
+			}
+			if got := allowAt(r, 0, now); got != want {
+				t.Fatalf("limit=%d event %d at %d: allow = %v, rescan says %v", limit, i, now, got, want)
+			}
+		}
+	}
+}
+
+// A configured max must not reserve memory for each key: a log grows only
+// with the events its key admits, so a new key costs a few small objects even
+// at max = 1e9, where reserving max timestamps would take about 24 GB.
+func TestHugeMaxAllocatesLittlePerKey(t *testing.T) {
+	l := New(Config{
+		IPRate: 1e9, IPBurst: 1_000_000,
+		ChainRate: 1e9, ChainWindow: time.Minute,
+		SequenceMax: 1_000_000_000, SequenceWindow: time.Minute,
+	})
+	ip := net.ParseIP("2001:db8::1")
+	var h uint64
+	tiers := map[string]func(){
+		"chain": func() {
+			h++
+			if !l.AllowChain(ip, h) {
+				t.Fatal("new chain key rejected")
+			}
+		},
+		"sequence": func() {
+			h++
+			if !l.sequenceLimiter.Allow(seqKey{hashKey: h, seqNum: h}) {
+				t.Fatal("new sequence key rejected")
+			}
+		},
+	}
+	for name, newKey := range tiers {
+		// The event log and its first array, plus map growth amortized.
+		allocs := testing.AllocsPerRun(1000, newKey)
+		if allocs > 3 {
+			t.Errorf("%s: %.0f allocs per new key, want at most 3", name, allocs)
+		}
+		const keys = 10_000
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		for i := 0; i < keys; i++ {
+			newKey()
+		}
+		runtime.ReadMemStats(&after)
+		per := (after.TotalAlloc - before.TotalAlloc) / keys
+		if per > 256 {
+			t.Errorf("%s: %d bytes allocated per new key, want at most 256", name, per)
+		}
+		t.Logf("%s: %.0f allocs, %d bytes per new key", name, allocs, per)
+	}
+}
+
+// The chain map is keyed by an unauthenticated (srcIP, HashKey) pair, so like
+// the sequence map it is swept of aged-out keys when it reaches its bound.
+// Live keys stay, and the sweep then waits for the map to double, so key
+// diversity cannot force a full sweep on every new key.
+func TestChainLimiterBoundsKeys(t *testing.T) {
+	const bound = 100
+	sec := int64(time.Second)
+	r := newSlidingWindowLimiter[chainKey](1, time.Second, bound)
+	ip := ipKey(net.ParseIP("2001:db8::1"))
+	key := func(i int) chainKey { return chainKey{ip: ip, hashKey: uint64(i)} }
+
+	for i := 0; i < bound; i++ {
+		allowAt(r, key(i), 0)
+	}
+	// At the bound with every key live: nothing is reclaimed, and every
+	// decision stands.
+	if !allowAt(r, key(bound), sec/2) {
+		t.Fatal("new key rejected at the bound")
+	}
+	if n := len(r.keys); n != bound+1 {
+		t.Fatalf("map = %d keys, want %d (live keys kept)", n, bound+1)
+	}
+	if allowAt(r, key(0), sec/2) {
+		t.Fatal("a live key lost its window at the sweep")
+	}
+	// Further new keys do not sweep again until the map doubles.
+	for i := bound + 1; i < 2*bound; i++ {
+		allowAt(r, key(i), sec/2)
+	}
+	if n := len(r.keys); n != 2*bound {
+		t.Fatalf("map = %d keys, want %d", n, 2*bound)
+	}
+	// Once those windows age out, the next new key sweeps them all.
+	allowAt(r, key(2*bound), 2*sec)
+	if n := len(r.keys); n != 1 {
+		t.Fatalf("map = %d keys after aged-out keys were swept, want 1", n)
+	}
+	if r.sweepAt != bound {
+		t.Fatalf("next sweep at %d keys, want the bound %d", r.sweepAt, bound)
+	}
+
+	if l := New(Config{}); l.chainLimiter.maxKeys != maxWindowKeys || l.sequenceLimiter.maxKeys != maxWindowKeys {
+		t.Fatal("New does not bound the chain and sequence maps")
+	}
+}
+
+// A burst's log array is given back once the burst ages out.
+func TestEventLogShrinksAfterBurst(t *testing.T) {
+	ms := int64(time.Millisecond)
+	r := newSlidingWindowLimiter[int](20_000, time.Second, maxWindowKeys)
+	var now int64
+	for i := 0; i < 20_000; i++ {
+		allowAt(r, 1, now) // a 20 000-event burst on key 1
+		allowAt(r, 2, now) // and on key 2
+		now += 5000
+	}
+	// Key 1 stays active at a low rate; key 2 goes quiet.
+	for i := 0; i < 30; i++ {
+		now += 100 * ms
+		allowAt(r, 1, now)
+	}
+	allowAt(r, 2, now)
+	for k, l := range r.keys {
+		if c := cap(l.ts); c > logShrinkCap {
+			t.Errorf("key %d keeps cap %d for %d live events", k, c, len(l.ts)-l.head)
+		}
+	}
+}
+
+// An IPv4 source keys one bucket whether it arrives in 4-byte or IPv4-mapped
+// form, as the string keys did.
+func TestIPv4FormsShareBuckets(t *testing.T) {
+	l := New(Config{
+		IPRate: 1e9, IPBurst: 1_000_000,
+		ChainRate: 1, ChainWindow: time.Minute,
+		SequenceMax: 1_000_000,
+		GroupRate:   1, GroupBurst: 1,
+	})
+	short := net.IPv4(192, 0, 2, 1).To4()
+	mapped := net.ParseIP("192.0.2.1")
+	if len(short) != net.IPv4len || len(mapped) != net.IPv6len {
+		t.Fatal("test addresses are not in the intended forms")
+	}
+	if !l.AllowChain(short, 7) || l.AllowChain(mapped, 7) {
+		t.Error("the two forms of one IPv4 address got separate chain buckets")
+	}
+	if !l.AllowGroup(short, 3) || l.AllowGroup(mapped, 3) {
+		t.Error("the two forms of one IPv4 address got separate group buckets")
+	}
+	if !l.AllowChain(net.ParseIP("192.0.2.2"), 7) {
+		t.Error("a different address shared the chain bucket")
 	}
 }

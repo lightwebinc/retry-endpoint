@@ -10,8 +10,8 @@
 package ratelimit
 
 import (
-	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -30,10 +30,10 @@ const (
 
 // Limiter provides four-tier rate limiting.
 type Limiter struct {
-	ipLimiter       *tokenBucketLimiter
-	chainLimiter    *slidingWindowLimiter
-	sequenceLimiter *sequenceLimiter
-	groupLimiter    *tokenBucketLimiter
+	ipLimiter       *tokenBucketLimiter[string]
+	chainLimiter    *slidingWindowLimiter[chainKey]
+	sequenceLimiter *slidingWindowLimiter[seqKey]
+	groupLimiter    *tokenBucketLimiter[groupKey]
 }
 
 // Config holds rate limiting configuration.
@@ -78,10 +78,10 @@ func New(cfg Config) *Limiter {
 		groupBurst = 50
 	}
 	return &Limiter{
-		ipLimiter:       newTokenBucketLimiter(cfg.IPRate, cfg.IPBurst),
-		chainLimiter:    newSlidingWindowLimiter(chainMax, cfg.ChainWindow),
-		sequenceLimiter: newSequenceLimiter(cfg.SequenceMax, cfg.SequenceWindow),
-		groupLimiter:    newTokenBucketLimiter(groupRate, groupBurst),
+		ipLimiter:       newTokenBucketLimiter[string](cfg.IPRate, cfg.IPBurst),
+		chainLimiter:    newSlidingWindowLimiter[chainKey](chainMax, cfg.ChainWindow, maxWindowKeys),
+		sequenceLimiter: newSlidingWindowLimiter[seqKey](cfg.SequenceMax, cfg.SequenceWindow, maxWindowKeys),
+		groupLimiter:    newTokenBucketLimiter[groupKey](groupRate, groupBurst),
 	}
 }
 
@@ -104,7 +104,7 @@ func (r *Limiter) Allow(srcIP net.IP, hashKey, startSeq uint64) (bool, Level) {
 	if !r.ipLimiter.Allow(srcIP.String()) {
 		return false, LevelIP
 	}
-	if !r.sequenceLimiter.Allow(hashKey, startSeq) {
+	if !r.sequenceLimiter.Allow(seqKey{hashKey: hashKey, seqNum: startSeq}) {
 		return false, LevelSequence
 	}
 	return true, ""
@@ -119,8 +119,7 @@ func (r *Limiter) AllowChain(srcIP net.IP, hashKey uint64) bool {
 	if hashKey == 0 {
 		return true
 	}
-	key := fmt.Sprintf("%s:%016x", srcIP.String(), hashKey)
-	return r.chainLimiter.Allow(key)
+	return r.chainLimiter.Allow(chainKey{ip: ipKey(srcIP), hashKey: hashKey})
 }
 
 // AllowGroup checks the group tier (post-lookup, before Retransmit).
@@ -128,28 +127,55 @@ func (r *Limiter) AllowChain(srcIP net.IP, hashKey uint64) bool {
 // should proceed; false means throttle the retransmit (answered with
 // THROTTLED when the throttle response is enabled, silence otherwise).
 func (r *Limiter) AllowGroup(srcIP net.IP, groupIdx uint32) bool {
-	key := fmt.Sprintf("%s:%d", srcIP.String(), groupIdx)
-	return r.groupLimiter.Allow(key)
+	return r.groupLimiter.Allow(groupKey{ip: ipKey(srcIP), groupIdx: groupIdx})
 }
 
-// ── token bucket (per string key) ─────────────────────────────────────────────
+// ── keys ──────────────────────────────────────────────────────────────────────
 
-type tokenBucketLimiter struct {
+// seqKey scopes a sequence bucket to one flow. See Limiter.Allow.
+type seqKey struct {
+	hashKey uint64
+	seqNum  uint64
+}
+
+// chainKey scopes a chain bucket to one (srcIP, HashKey) pair.
+type chainKey struct {
+	ip      [16]byte
+	hashKey uint64
+}
+
+// groupKey scopes a group bucket to one (srcIP, groupIdx) pair.
+type groupKey struct {
+	ip       [16]byte
+	groupIdx uint32
+}
+
+// ipKey returns ip in 16-byte form. An IPv4 address keys alike in its 4-byte
+// and IPv4-mapped forms, as it did when keys were built from net.IP.String,
+// and an invalid IP keys as the unspecified address.
+func ipKey(ip net.IP) [16]byte {
+	addr, _ := netip.AddrFromSlice(ip)
+	return addr.As16()
+}
+
+// ── token bucket (per comparable key) ─────────────────────────────────────────
+
+type tokenBucketLimiter[K comparable] struct {
 	mu    sync.Mutex
-	limit map[string]*rate.Limiter
+	limit map[K]*rate.Limiter
 	r     rate.Limit
 	burst int
 }
 
-func newTokenBucketLimiter(tokensPerSec float64, burst int) *tokenBucketLimiter {
-	return &tokenBucketLimiter{
-		limit: make(map[string]*rate.Limiter),
+func newTokenBucketLimiter[K comparable](tokensPerSec float64, burst int) *tokenBucketLimiter[K] {
+	return &tokenBucketLimiter[K]{
+		limit: make(map[K]*rate.Limiter),
 		r:     rate.Limit(tokensPerSec),
 		burst: burst,
 	}
 }
 
-func (t *tokenBucketLimiter) Allow(key string) bool {
+func (t *tokenBucketLimiter[K]) Allow(key K) bool {
 	t.mu.Lock()
 	l, ok := t.limit[key]
 	if !ok {
@@ -160,143 +186,159 @@ func (t *tokenBucketLimiter) Allow(key string) bool {
 	return l.Allow()
 }
 
-// ── sliding window (per string key) ───────────────────────────────────────────
+// ── sliding window (per comparable key) ───────────────────────────────────────
 
-type slidingWindowLimiter struct {
-	mu     sync.Mutex
-	keys   map[string]*windowEntry
-	max    int
-	window time.Duration
-}
+// maxWindowKeys bounds each sliding-window map. It is reached only under key
+// diversity far above any real flow count, at which point keys whose window
+// has fully aged out are swept.
+const maxWindowKeys = 100_000
 
-type windowEntry struct {
-	timestamps []time.Time
-}
+// logInitCap is the capacity a key's event log starts with. A log grows by
+// append as its key admits events, so a high max costs memory only for the
+// events a key actually has in its window.
+const logInitCap = 4
 
-func newSlidingWindowLimiter(max int, window time.Duration) *slidingWindowLimiter {
-	return &slidingWindowLimiter{
-		keys:   make(map[string]*windowEntry),
-		max:    max,
-		window: window,
-	}
-}
+// logShrinkCap is the capacity above which a log moves to a smaller array
+// once its live events fill under an eighth of it, so a burst does not pin
+// its peak memory for the life of the key.
+const logShrinkCap = 256
 
-func (r *slidingWindowLimiter) Allow(key string) bool {
-	now := time.Now()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	entry, ok := r.keys[key]
-	if !ok {
-		entry = &windowEntry{timestamps: make([]time.Time, 0, r.max)}
-		r.keys[key] = entry
-	}
-
-	cutoff := now.Add(-r.window)
-	validIdx := 0
-	for _, ts := range entry.timestamps {
-		if ts.After(cutoff) {
-			entry.timestamps[validIdx] = ts
-			validIdx++
-		}
-	}
-	entry.timestamps = entry.timestamps[:validIdx]
-
-	if len(entry.timestamps) >= r.max {
-		return false
-	}
-	entry.timestamps = append(entry.timestamps, now)
-	return true
-}
-
-// ── sliding window (per uint64 key, for SeqNum) ───────────────────────────────────────────
-
-// sequenceLimiter provides sliding-window rate limiting per SeqNum (uint64).
+// slidingWindowLimiter admits at most max events per key in any window,
+// keeping an exact log of the events each key admitted within the window.
 //
-// The legacy implementation used a monotonic counter per SequenceID with no
-// expiration. That caused long-lived flows to eventually exhaust the counter
-// and drop every subsequent NACK for that flow, without any way to recover
-// short of restarting the process. The sliding-window form bounds memory and
-// self-heals: a SequenceID that has been quiet for [window] is re-admitted
-// at full capacity.
-// seqKey scopes a sequence bucket to one flow. See Limiter.Allow.
-type seqKey struct {
-	hashKey uint64
-	seqNum  uint64
+// The sequence tier once used a monotonic counter per SequenceID with no
+// expiration, so a long-lived flow eventually exhausted its counter and lost
+// every later NACK until the process restarted. The sliding window bounds
+// memory and self-heals: a key that has been quiet for a window is admitted
+// again at full capacity.
+type slidingWindowLimiter[K comparable] struct {
+	mu      sync.Mutex
+	keys    map[K]*eventLog
+	max     int
+	window  int64 // nanoseconds
+	maxKeys int   // map size at which aged-out keys are first swept
+	sweepAt int   // map size that triggers the next sweep
 }
 
-// maxSequenceKeys bounds the sequence map. Reached only under key diversity far
-// above any real flow count, at which point expired entries are swept.
-const maxSequenceKeys = 100_000
-
-type sequenceLimiter struct {
-	mu     sync.Mutex
-	seqs   map[seqKey]*windowEntry
-	max    int
-	window time.Duration
-}
-
-func newSequenceLimiter(max int, window time.Duration) *sequenceLimiter {
-	return &sequenceLimiter{
-		seqs:   make(map[seqKey]*windowEntry),
-		max:    max,
-		window: window,
+func newSlidingWindowLimiter[K comparable](max int, window time.Duration, maxKeys int) *slidingWindowLimiter[K] {
+	return &slidingWindowLimiter[K]{
+		keys:    make(map[K]*eventLog),
+		max:     max,
+		window:  int64(window),
+		maxKeys: maxKeys,
+		sweepAt: maxKeys,
 	}
 }
 
-func (r *sequenceLimiter) Allow(hashKey, seqNum uint64) bool {
-	now := time.Now()
+// Allow records an event for key now and reports whether it is within the
+// limit.
+func (r *slidingWindowLimiter[K]) Allow(key K) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Read the clock under the lock, so each log is appended in nondecreasing
+	// order, which expiring by prefix relies on.
+	return r.allowLocked(key, monoNow())
+}
 
-	key := seqKey{hashKey: hashKey, seqNum: seqNum}
-	entry, ok := r.seqs[key]
+// allowLocked is Allow at time now. Callers hold r.mu.
+func (r *slidingWindowLimiter[K]) allowLocked(key K, now int64) bool {
+	l, ok := r.keys[key]
 	if !ok {
-		// Bound the map before inserting. Keys are attacker-influenced (a NACK's
-		// HashKey and SeqNum are unauthenticated), and nothing evicted them, so
-		// spoofed key diversity grew this map without limit for the life of the
-		// process. Sweeping entries whose window has fully aged out reclaims
-		// every key that is no longer rate-limiting anything.
-		if len(r.seqs) >= maxSequenceKeys {
+		// Bound the map before inserting. Keys are attacker-influenced (they
+		// come from unauthenticated NACK fields and a spoofable source
+		// address), and nothing else evicts them, so key diversity alone would
+		// grow the map without limit for the life of the process. Sweeping
+		// keys whose window has fully aged out reclaims every key that is no
+		// longer rate-limiting anything.
+		if len(r.keys) >= r.sweepAt {
 			r.evictExpiredLocked(now)
 		}
-		entry = &windowEntry{timestamps: make([]time.Time, 0, r.max)}
-		r.seqs[key] = entry
+		l = &eventLog{}
+		r.keys[key] = l
 	}
+	return l.allow(now, r.window, r.max)
+}
 
-	cutoff := now.Add(-r.window)
-	validIdx := 0
-	for _, ts := range entry.timestamps {
-		if ts.After(cutoff) {
-			entry.timestamps[validIdx] = ts
-			validIdx++
+// evictExpiredLocked drops keys whose whole window has aged out. Callers hold
+// r.mu. Such a key is rate-limiting nothing, so removing it changes no
+// decision; it only reclaims a key that an unauthenticated NACK was able to
+// create. Live keys must stay, so the map can remain above maxKeys; the next
+// sweep then waits until the map has doubled, which keeps sweeping O(1)
+// amortized per new key instead of a full scan for each one.
+func (r *slidingWindowLimiter[K]) evictExpiredLocked(now int64) {
+	cutoff := now - r.window
+	for k, l := range r.keys {
+		if l.idle(cutoff) {
+			delete(r.keys, k)
 		}
 	}
-	entry.timestamps = entry.timestamps[:validIdx]
+	r.sweepAt = max(r.maxKeys, 2*len(r.keys))
+}
 
-	if len(entry.timestamps) >= r.max {
+// eventLog is one key's admitted events as monotonic nanosecond timestamps in
+// nondecreasing order. ts[:head] have expired.
+type eventLog struct {
+	ts   []int64
+	head int
+}
+
+// allow expires the events at or before now-window, then records an event at
+// now and reports true if fewer than max remain. now must not precede the
+// last recorded event.
+func (l *eventLog) allow(now, window int64, max int) bool {
+	l.expire(now - window)
+	if len(l.ts)-l.head >= max {
 		return false
 	}
-	entry.timestamps = append(entry.timestamps, now)
+	if l.ts == nil {
+		l.ts = make([]int64, 0, logInitCap)
+	}
+	l.ts = append(l.ts, now)
 	return true
 }
 
-// evictExpiredLocked drops sequence buckets whose whole window has aged out.
-// Callers hold r.mu. An entry with no live timestamps is rate-limiting nothing,
-// so removing it changes no decision — it only reclaims a key that an
-// unauthenticated NACK was able to create.
-func (r *sequenceLimiter) evictExpiredLocked(now time.Time) {
-	cutoff := now.Add(-r.window)
-	for k, e := range r.seqs {
-		live := false
-		for _, ts := range e.timestamps {
-			if ts.After(cutoff) {
-				live = true
-				break
-			}
-		}
-		if !live {
-			delete(r.seqs, k)
-		}
+// expire drops the events at or before cutoff. Timestamps never decrease, so
+// those events are a prefix: head steps past them, and once head passes half
+// the slice the live events move to the front. Both are O(1) amortized per
+// event.
+func (l *eventLog) expire(cutoff int64) {
+	n := len(l.ts)
+	if n == 0 {
+		return
 	}
+	if l.ts[n-1] <= cutoff {
+		// The whole window has aged out.
+		l.head = 0
+		if cap(l.ts) > logShrinkCap {
+			l.ts = nil
+		} else {
+			l.ts = l.ts[:0]
+		}
+		return
+	}
+	for l.ts[l.head] <= cutoff {
+		l.head++
+	}
+	if 2*l.head < n {
+		return
+	}
+	live := l.ts[l.head:]
+	if cap(l.ts) > logShrinkCap && 8*len(live) < cap(l.ts) {
+		l.ts = append(make([]int64, 0, 2*len(live)), live...)
+	} else {
+		l.ts = l.ts[:copy(l.ts, live)]
+	}
+	l.head = 0
 }
+
+// idle reports whether every event is at or before cutoff.
+func (l *eventLog) idle(cutoff int64) bool {
+	return len(l.ts) == 0 || l.ts[len(l.ts)-1] <= cutoff
+}
+
+// epoch anchors monoNow.
+var epoch = time.Now()
+
+// monoNow returns the nanoseconds since epoch on the monotonic clock, so a
+// wall-clock step cannot move a window.
+func monoNow() int64 { return int64(time.Since(epoch)) }

@@ -382,6 +382,11 @@ func (r *Recorder) BeaconAdvertSent() {
 	r.beaconAdvertsSent.Add(context.Background(), 1)
 }
 
+// SetWorkers corrects the ingress worker count readiness waits for, once the
+// groups are known (-ingress-workers is trimmed to the group count). Call it
+// before any worker starts.
+func (r *Recorder) SetWorkers(n int) { r.numWorkers = n }
+
 func (r *Recorder) WorkerReady() {
 	r.readyCount.Add(1)
 }
