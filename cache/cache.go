@@ -13,6 +13,7 @@ import (
 	"time"
 
 	scache "github.com/lightwebinc/shard-common/cache"
+	"github.com/lightwebinc/shard-common/cache/memory"
 )
 
 // Cache is the frame-store surface consumed by the ingress worker and NACK
@@ -34,6 +35,7 @@ type Store struct {
 	b         scache.Backend
 	prefix    []byte
 	opTimeout time.Duration
+	local     bool // in-process backend: operations never wait, so no deadline
 }
 
 // NewStore wraps backend b, prepending prefix to every key and bounding each
@@ -42,7 +44,8 @@ func NewStore(b scache.Backend, prefix string, opTimeout time.Duration) *Store {
 	if opTimeout <= 0 {
 		opTimeout = time.Second
 	}
-	return &Store{b: b, prefix: []byte(prefix), opTimeout: opTimeout}
+	_, local := b.(*memory.Backend)
+	return &Store{b: b, prefix: []byte(prefix), opTimeout: opTimeout, local: local}
 }
 
 func (s *Store) key(k []byte) []byte {
@@ -53,6 +56,11 @@ func (s *Store) key(k []byte) []byte {
 }
 
 func (s *Store) opCtx() (context.Context, context.CancelFunc) {
+	// The in-memory backend never blocks, and a deadline costs a timer per
+	// operation: at a stored frame per call that was an eighth of the store.
+	if s.local {
+		return context.Background(), func() {}
+	}
 	return context.WithTimeout(context.Background(), s.opTimeout)
 }
 

@@ -54,3 +54,46 @@ func TestProcessBundleFrame_ZeroSeqNum_Skip(t *testing.T) {
 		t.Fatalf("zero-seqnum bundle must not be cached, got %d", mc.storeCount())
 	}
 }
+
+// The header-only key read must agree with a full decode on every bundle it
+// accepts, and refuse what a decode refuses for its header.
+func TestBundleKeyMatchesDecode(t *testing.T) {
+	b := &bundle.Bundle{
+		HashKey:   0xAABBCCDDEEFF0011,
+		SeqNum:    42,
+		GroupIdx:  3,
+		ShardBits: 2,
+		Members:   []bundle.Member{{Tx: []byte("tx-one")}, {Tx: []byte("tx-two")}, {Tx: []byte("tx-three")}},
+	}
+	raw, err := b.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hk, seq, n, err := bundleKey(raw)
+	if err != nil {
+		t.Fatalf("bundleKey: %v", err)
+	}
+	d, err := bundle.Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hk != d.HashKey || seq != d.SeqNum || n != len(d.Members) {
+		t.Errorf("bundleKey = (%#x, %d, %d), decode = (%#x, %d, %d)", hk, seq, n, d.HashKey, d.SeqNum, len(d.Members))
+	}
+
+	bad := map[string][]byte{
+		"short":     raw[:bundle.HeaderSize-1],
+		"truncated": raw[:len(raw)-1],
+	}
+	badMagic := append([]byte(nil), raw...)
+	badMagic[0] ^= 0xFF
+	bad["magic"] = badMagic
+	badVer := append([]byte(nil), raw...)
+	badVer[6] = 0x01
+	bad["version"] = badVer
+	for name, r := range bad {
+		if _, _, _, err := bundleKey(r); err == nil {
+			t.Errorf("%s: bundleKey accepted it", name)
+		}
+	}
+}

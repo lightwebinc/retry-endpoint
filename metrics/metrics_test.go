@@ -210,3 +210,33 @@ func TestSetOwnSource_UnsetIsNoop(t *testing.T) {
 		}
 	}
 }
+
+// FrameCached keeps one measurement option per source; the exported series
+// must count each source's frames as building the option per call did.
+func TestFrameCachedPerSource(t *testing.T) {
+	r := newRecorder(t)
+	for i := 0; i < 3; i++ {
+		r.FrameCached("2001:db8::1")
+	}
+	r.FrameCached("2001:db8::2")
+	mfs, err := r.promReg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, mf := range mfs {
+		if mf.GetName() != "bre_cache_stored_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "source" {
+					got[lp.GetValue()] = m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	if got["2001:db8::1"] != 3 || got["2001:db8::2"] != 1 || len(got) != 2 {
+		t.Errorf("bre_cache_stored_total by source = %v, want 2001:db8::1=3, 2001:db8::2=1", got)
+	}
+}

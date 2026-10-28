@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -40,6 +41,12 @@ type Recorder struct {
 	readyCount atomic.Int32
 	draining   atomic.Bool
 	shutdownFn func(context.Context) error
+
+	// cachedBySource holds each source's measurement option for FrameCached,
+	// built on first sight: that call runs once per stored frame, and building
+	// the attribute set every time was half its cost. Copy-on-write.
+	cachedBySource   atomic.Pointer[map[string]metric.MeasurementOption]
+	cachedBySourceMu sync.Mutex
 
 	// Cache metrics
 	cacheHits   metric.Int64Counter
@@ -345,9 +352,35 @@ func (r *Recorder) TeeDatagram(form string) {
 // own-source exclusion (which never has a series at all).
 func (r *Recorder) FrameCached(source string) {
 	r.framesCached.Add(context.Background(), 1)
-	r.cacheStored.Add(context.Background(), 1, metric.WithAttributes(
-		attribute.String("source", source),
-	))
+	r.cacheStored.Add(context.Background(), 1, r.sourceOption(source))
+}
+
+// sourceOption returns the cached measurement option for source. Reads are
+// lock-free.
+func (r *Recorder) sourceOption(source string) metric.MeasurementOption {
+	if m := r.cachedBySource.Load(); m != nil {
+		if o, ok := (*m)[source]; ok {
+			return o
+		}
+	}
+	r.cachedBySourceMu.Lock()
+	defer r.cachedBySourceMu.Unlock()
+	old := r.cachedBySource.Load()
+	if old != nil {
+		if o, ok := (*old)[source]; ok {
+			return o
+		}
+	}
+	o := metric.WithAttributeSet(attribute.NewSet(attribute.String("source", source)))
+	nm := make(map[string]metric.MeasurementOption)
+	if old != nil {
+		for k, v := range *old {
+			nm[k] = v
+		}
+	}
+	nm[source] = o
+	r.cachedBySource.Store(&nm)
+	return o
 }
 
 // PreCreateSources publishes a zero for every source this retry joins, so

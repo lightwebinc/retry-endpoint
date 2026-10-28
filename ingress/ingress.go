@@ -232,6 +232,10 @@ func (w *Worker) Run(ctx context.Context) error {
 	go w.reassertJoins(ctx, fd)
 
 	buf := make([]byte, recvBufSize)
+	// The source address is formatted once per change of source, not once per
+	// frame: a fabric has a handful of sources and each sends in long runs.
+	var lastSrc [16]byte
+	src := ""
 	for {
 		n, from, err := unix.Recvfrom(fd, buf, 0)
 		if err != nil {
@@ -258,11 +262,14 @@ func (w *Worker) Run(ctx context.Context) error {
 			// (SSM: one (S,G) per publisher) — it labels the per-source cache
 			// counters so a retry starved of ONE source's frames is a zero
 			// rate, not an invisible absence.
-			src := ""
 			if sa, ok := from.(*unix.SockaddrInet6); ok {
-				src = netip.AddrFrom16(sa.Addr).String()
+				if src == "" || sa.Addr != lastSrc {
+					lastSrc, src = sa.Addr, netip.AddrFrom16(sa.Addr).String()
+				}
+				w.processFrame(buf[:n], src)
+			} else {
+				w.processFrame(buf[:n], "")
 			}
-			w.processFrame(buf[:n], src)
 		}
 	}
 }
@@ -446,7 +453,10 @@ func (w *Worker) processFragmentFrame(raw []byte, src string) {
 // frame — and retransmitted whole on NACK; the retry endpoint never parses
 // members.
 func (w *Worker) processBundleFrame(raw []byte, src string) {
-	b, err := bundle.Decode(raw)
+	// A bundle is stored opaquely under its flow key, so only its header is
+	// read: decoding every member on the way in was a twentieth of the cache's
+	// CPU at line rate, and the listener checks the members it is sent.
+	hashKey, seqNum, members, err := bundleKey(raw)
 	if err != nil {
 		if w.rec != nil {
 			w.rec.FrameDropped("decode_error")
@@ -461,13 +471,13 @@ func (w *Worker) processBundleFrame(raw []byte, src string) {
 		w.rec.FrameReceived()
 	}
 
-	if b.SeqNum == 0 {
+	if seqNum == 0 {
 		return // proxy has not stamped this bundle
 	}
 
 	var key [16]byte
-	binary.BigEndian.PutUint64(key[0:8], b.HashKey)
-	binary.BigEndian.PutUint64(key[8:16], b.SeqNum)
+	binary.BigEndian.PutUint64(key[0:8], hashKey)
+	binary.BigEndian.PutUint64(key[8:16], seqNum)
 	if err := w.cache.Store(key[:], raw, w.ttls.Tx); err != nil {
 		if w.rec != nil {
 			w.rec.CacheError()
@@ -482,11 +492,31 @@ func (w *Worker) processBundleFrame(raw []byte, src string) {
 
 	if w.debug {
 		w.log.Debug("bundle cached",
-			"hash_key", b.HashKey,
-			"seq_num", b.SeqNum,
-			"members", len(b.Members),
+			"hash_key", hashKey,
+			"seq_num", seqNum,
+			"members", members,
 		)
 	}
+}
+
+// bundleKey reads a BRC-142 bundle's flow key and member count from its
+// header (see package bundle for the layout), checking the magic, the frame
+// version and that the member section fits the datagram.
+func bundleKey(raw []byte) (hashKey, seqNum uint64, members int, err error) {
+	if len(raw) < bundle.HeaderSize {
+		return 0, 0, 0, bundle.ErrTooShort
+	}
+	if binary.BigEndian.Uint32(raw[0:4]) != frame.MagicBSV {
+		return 0, 0, 0, bundle.ErrBadMagic
+	}
+	if raw[6] != bundle.FrameVerBundle {
+		return 0, 0, 0, bundle.ErrBadVer
+	}
+	if uint64(len(raw)-bundle.HeaderSize) < uint64(binary.BigEndian.Uint32(raw[62:66])) {
+		return 0, 0, 0, bundle.ErrTruncated
+	}
+	return binary.BigEndian.Uint64(raw[40:48]), binary.BigEndian.Uint64(raw[48:56]),
+		int(binary.BigEndian.Uint16(raw[60:62])), nil
 }
 
 // processBlockFrame handles BRC-131 block control frames (FrameVer 0x04).
