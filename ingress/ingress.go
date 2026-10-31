@@ -101,7 +101,21 @@ type Worker struct {
 	rec     *metrics.Recorder
 	ttls    TTLConfig
 	debug   bool
+	recvBuf int // SO_RCVBUF asked for this worker's sockets; 0 = socketRecvBuf
 	log     *slog.Logger
+}
+
+// SetRecvBuf sets the receive buffer asked for the worker's multicast socket
+// and its tee socket. Must be called before [Worker.Run] or [Worker.RunTee].
+func (w *Worker) SetRecvBuf(n int) {
+	w.recvBuf = n
+}
+
+func (w *Worker) recvBufBytes() int {
+	if w.recvBuf > 0 {
+		return w.recvBuf
+	}
+	return socketRecvBuf
 }
 
 // New constructs a Worker.
@@ -680,7 +694,7 @@ func (w *Worker) processAnchorFrame(raw []byte, src string) {
 // (mc-join-enabled=false, the tee-only end-state that frees the shared data
 // port on a collapsed node).
 func (w *Worker) RunTee(ctx context.Context, listen netip.AddrPort) error {
-	fd, err := openTeeSocket(listen)
+	fd, err := openTeeSocket(listen, w.recvBufBytes())
 	if err != nil {
 		return fmt.Errorf("ingress tee: %w", err)
 	}
@@ -759,12 +773,12 @@ func (w *Worker) RunTee(ctx context.Context, listen netip.AddrPort) error {
 
 // openTeeSocket binds an exclusive AF_INET6 UDP socket on the given loopback
 // address. No co-bind options: the tee port is single-owner by design.
-func openTeeSocket(listen netip.AddrPort) (int, error) {
+func openTeeSocket(listen netip.AddrPort, recvBuf int) (int, error) {
 	fd, err := unix.Socket(unix.AF_INET6, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return -1, fmt.Errorf("socket: %w", err)
 	}
-	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, socketRecvBuf)
+	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, recvBuf)
 	sa := &unix.SockaddrInet6{Port: int(listen.Port()), Addr: listen.Addr().As16()}
 	if err := unix.Bind(fd, sa); err != nil {
 		_ = unix.Close(fd)
@@ -795,7 +809,7 @@ func (w *Worker) openRawSocket() (int, error) {
 		_ = unix.Close(fd)
 		return -1, fmt.Errorf("co-bind opts: %w", err)
 	}
-	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, socketRecvBuf)
+	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, w.recvBufBytes())
 	// Scope this socket to the groups it actually joined. Linux-only knob; on other
 	// platforms the default behaviour already matches. See mcastall_linux.go.
 	disableMulticastAll(fd)

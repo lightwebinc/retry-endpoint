@@ -163,6 +163,7 @@ type Config struct {
 
 	// Runtime
 	NumWorkers   int           // Worker goroutines for multicast ingress (-ingress-workers)
+	RecvBufBytes int           // SO_RCVBUF asked for each ingress socket, multicast and tee (-ingress-recv-buf-bytes)
 	Debug        bool          // Enable per-packet debug logging
 	DrainTimeout time.Duration // Pre-drain delay before closing sockets
 
@@ -263,6 +264,8 @@ func Load() (*Config, error) {
 	flag.IntVar(&c.NumWorkers, "ingress-workers", envInt("INGRESS_WORKERS", 1),
 		"multicast ingress workers: each joins every Nth group on its own socket, so the cache's receive path scales across cores (one worker carries about 100k datagrams/s). More workers than groups are trimmed to the group count")
 
+	flag.IntVar(&c.RecvBufBytes, "ingress-recv-buf-bytes", envInt("INGRESS_RECV_BUF_BYTES", 64<<20),
+		"receive buffer asked for each ingress socket, the multicast workers' and the tee's (SO_RCVBUF, clamped by net.core.rmem_max). An origin's proxy flushes a whole object as one burst: a 4 MiB piece at a 9000-byte fragment MTU is 4.7 MB, and the tee carries every fragment the listener gets, so this must hold the burst or the cache misses exactly the frames a NACK will ask for")
 	egressFlag := flag.String("egress-iface", envStr("EGRESS_IFACE", "eth0"),
 		"comma-separated NIC names for multicast egress")
 	flag.IntVar(&c.EgressPort, "egress-port", envInt("EGRESS_PORT", 9001),

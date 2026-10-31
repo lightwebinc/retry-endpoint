@@ -463,6 +463,7 @@ func run() error {
 	ings := make([]*ingress.Worker, len(parts))
 	for i, gs := range parts {
 		ings[i] = ingress.New(mcIface, cfg.ListenPort, gs, c, rec, ttls, cfg.Debug)
+		ings[i].SetRecvBuf(cfg.RecvBufBytes)
 	}
 	ing := ings[0]
 	rec.SetWorkers(len(ings))
