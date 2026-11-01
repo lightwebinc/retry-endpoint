@@ -82,7 +82,7 @@ func TestProcessNACK_ProxiedHit_ReturnsUnicast(t *testing.T) {
 	const seq uint64 = 7
 	storeFrame(mc, hashKey, seq, buildCacheFrame(t, seq))
 
-	// Unicast mode OFF — a proxied NACK must still get a unicast copy.
+	// Unicast mode OFF: a proxied NACK must still get a unicast copy.
 	s := New(9300, mc, permissiveRL(), nil, rt, 1, false)
 
 	nack := buildNACK(msgTypeNACK, hashKey, seq, seq)

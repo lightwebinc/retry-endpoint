@@ -296,7 +296,7 @@ func TestGroupRateLimit_SenderAlias(t *testing.T) {
 // Two different flows repairing the SAME SeqNum must not share a bucket. Every
 // flow's counter starts at 1, so a bare-SeqNum bucket was shared fabric-wide:
 // ~100 junk NACKs a minute for a low sequence number exhausted repair of that
-// sequence for every flow the endpoint served — targeted repair-denial for
+// sequence for every flow the endpoint served, targeted repair-denial for
 // about 107 bytes a second, and self-inflicted contention at scale.
 func TestSequenceTierIsScopedPerFlow(t *testing.T) {
 	l := New(Config{

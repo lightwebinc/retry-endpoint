@@ -47,7 +47,7 @@ func TestLoad_TeeListenRejectsNonLoopback(t *testing.T) {
 
 func TestLoad_JoinDisabledRequiresTee(t *testing.T) {
 	// A retry with neither multicast join nor tee ingest answers every NACK
-	// with MISS while its process looks healthy — refuse to start that way.
+	// with MISS while its process looks healthy; refuse to start that way.
 	_, err := loadWithArgs(t, withEgress(t, "-mc-join-enabled=false")...)
 	if err == nil {
 		t.Fatal("mc-join-enabled=false without -tee-listen should error")

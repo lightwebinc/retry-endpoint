@@ -11,7 +11,7 @@ import (
 )
 
 // TestTargetGroup_BEEF proves a cached V9 frame retransmits to the
-// domain-tagged group derived from its TopicID at offset 56 — never from the
+// domain-tagged group derived from its TopicID at offset 56, never from the
 // offset-8 ContentID (which is not a shard key).
 func TestTargetGroup_BEEF(t *testing.T) {
 	eng := shard.New(0xFF35, shard.DefaultGroupID, 2)

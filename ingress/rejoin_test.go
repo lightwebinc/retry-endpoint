@@ -13,7 +13,7 @@ import (
 // A JOIN IS NOT A DURABLE DECLARATION.
 //
 // The kernel's membership can be lost underneath a running socket when the
-// forwarding state it depends on changes — a routing re-convergence that moves
+// forwarding state it depends on changes: a routing re-convergence that moves
 // the multicast RPF, a forwarder restart, an interface rebuild. Nothing in the
 // socket API reports it: recvfrom just stops producing frames for that source
 // while every other source keeps flowing, so the process looks healthy and its
@@ -33,7 +33,7 @@ func TestReassertJoinsToleratesAlreadyJoinedAndStops(t *testing.T) {
 		log:    slog.Default(),
 	}
 
-	// First pass: an error IS fatal — a worker that cannot join has nothing to do.
+	// First pass: an error IS fatal: a worker that cannot join has nothing to do.
 	if err := w.joinAll(-1, true); err == nil {
 		t.Error("a failed FIRST join was swallowed; the worker would run deaf")
 	}
@@ -55,7 +55,7 @@ func TestReassertJoinsToleratesAlreadyJoinedAndStops(t *testing.T) {
 }
 
 // The cadence has to be well inside the fabric's MLD query intervals, or a
-// membership can lapse and stay lapsed for longer than a query cycle — which is
+// membership can lapse and stay lapsed for longer than a query cycle, which is
 // the window this whole mechanism exists to close.
 func TestJoinIntervalIsInsideTheQueryWindow(t *testing.T) {
 	if joinInterval > 60*time.Second {

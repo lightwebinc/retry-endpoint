@@ -121,7 +121,7 @@ func TestBeaconGroupPrefixes_AllUnderASM(t *testing.T) {
 // BRC-129 tables an SSM control group at site and global only, so
 // -beacon-scope=all (which covers org) cannot be made fully conformant.
 // "derived" fails at load with a message naming the fix rather than quietly
-// dropping org or falling back to FF08 — a wrong group is invisible on the
+// dropping org or falling back to FF08: a wrong group is invisible on the
 // wire.
 func TestBeaconGroupPrefixes_AllUnderSSMIsRejectedByDerived(t *testing.T) {
 	c := &Config{BeaconScope: "all", SourceMode: "ssm", ControlGroupCompat: ControlGroupDerived}

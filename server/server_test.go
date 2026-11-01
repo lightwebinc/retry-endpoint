@@ -339,7 +339,7 @@ func TestProcessNACK_GroupLimit_ThrottleRespOff_SkipsRetransmit_Silent(t *testin
 	s.SetShardEngine(engine)
 	src := &net.UDPAddr{IP: net.IPv6loopback, Port: 12345}
 
-	// First request consumes the burst of 1 — retransmit fires, ACK sent.
+	// First request consumes the burst of 1: retransmit fires, ACK sent.
 	s.processNACK(conn, 0, buildNACK(msgTypeNACK, 0, seqNum, seqNum), src)
 	if !rt.called {
 		t.Fatal("first request: retransmitter must fire")
@@ -351,7 +351,7 @@ func TestProcessNACK_GroupLimit_ThrottleRespOff_SkipsRetransmit_Silent(t *testin
 	// Reset for second call.
 	rt.called = false
 
-	// Second request: group limiter exhausted — retransmit must be skipped
+	// Second request: group limiter exhausted; retransmit must be skipped
 	// and, with the throttle response off, no response sent. Never ACK: an
 	// ACK would cancel the listener gap with nothing retransmitted.
 	s.processNACK(conn, 0, buildNACK(msgTypeNACK, 0, seqNum, seqNum), src)

@@ -1,28 +1,31 @@
-// Package ingress implements the multicast receive worker for
+// Package ingress implements the multicast receive workers for
 // retry-endpoint.
 //
 // # Worker model
 //
-// Exactly one worker binds a UDP socket with SO_REUSEADDR on the configured
-// port and joins all configured multicast groups on the configured interface.
+// Each worker binds a UDP socket with SO_REUSEADDR on the configured port and
+// joins its share of the configured multicast groups ([Partition]: every nth
+// group) on the configured interface.
 // SO_REUSEADDR (not SO_REUSEPORT) is the cross-EUID co-bind path: it lets this
 // socket co-exist with a co-resident shard-listener under a DIFFERENT user on a
-// collapsed node — both receive the multicast group. Linux delivers multicast
-// to ALL such sockets, so a second retry-endpoint worker would store each frame
-// twice; hence exactly one worker.
+// collapsed node; both receive the multicast group. Linux delivers multicast
+// to ALL such sockets, so two workers joined to the same group would store each
+// frame twice; hence each group belongs to exactly one worker, and the socket
+// turns IPV6_MULTICAST_ALL off so it receives only the groups it joined (see
+// mcastall_linux.go). Platforms without that option run one worker.
 //
 // A second, optional ingest exists beside it: [Worker.RunTee] binds a
 // dedicated loopback socket fed by co-resident processes mirroring frames
 // (proxy -retry-tee: own egress, raw; listener -retry-tee: fabric-received
 // frames, teewire-enveloped with their original source). With both feeds a
-// frame this node receives natively may store twice — an idempotent overwrite
+// frame this node receives natively may store twice, an idempotent overwrite
 // of identical bytes. Tee-only operation (join disabled) is the collapsed-node
 // end-state that frees the shared wildcard data port entirely.
 //
 // # Hot path per frame
 //
-//  1. Recvfrom (64 MiB receive buffer)
-//  2. frame.Decode — extract HashKey, SeqNum
+//  1. Recvfrom (SO_RCVBUF per [Worker.SetRecvBuf]; 64 MiB default)
+//  2. frame.Decode: extract HashKey, SeqNum
 //  3. Drop if SeqNum == 0 (proxy has not stamped the frame)
 //  4. Store: key = HashKey(8B) || SeqNum(8B) → raw frame
 //
@@ -152,8 +155,8 @@ func (w *Worker) SetGroupSources(src GroupSources) {
 // against a socket we already hold.
 const joinInterval = 30 * time.Second
 
-// joinAll (re)joins every configured group. On the FIRST pass an error is fatal
-// — a worker that cannot join has nothing to do. On a re-assert it is not: the
+// joinAll (re)joins every configured group. On the FIRST pass an error is fatal:
+// a worker that cannot join has nothing to do. On a re-assert it is not: the
 // common case is a membership that is already present, which some stacks report
 // as an error, and a node must not lose a working ingress because a redundant
 // join was refused.
@@ -196,7 +199,7 @@ func (w *Worker) reassertJoins(ctx context.Context, fd int) {
 }
 
 // Run opens a SO_REUSEADDR socket, joins all multicast groups, and processes
-// frames until ctx is cancelled.
+// frames until ctx is canceled.
 func (w *Worker) Run(ctx context.Context) error {
 	if w.iface == nil {
 		return fmt.Errorf("ingress: no interface (multicast join requires -mc-iface; tee-only nodes must not call Run)")
@@ -228,7 +231,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 	// Re-assert the memberships on a cadence. A join is not a durable
 	// declaration: the kernel's membership can be lost underneath a running
-	// socket when the forwarding state it depends on changes — a routing
+	// socket when the forwarding state it depends on changes: a routing
 	// re-convergence that moves the multicast RPF, a forwarder restart, an
 	// interface rebuild. Nothing in the socket API tells us; recvfrom simply
 	// stops producing frames for that source while every other source keeps
@@ -273,7 +276,7 @@ func (w *Worker) Run(ctx context.Context) error {
 		}
 		if n > 0 {
 			// The datagram's source address IS the fabric source of the frame
-			// (SSM: one (S,G) per publisher) — it labels the per-source cache
+			// (SSM: one (S,G) per publisher); it labels the per-source cache
 			// counters so a retry starved of ONE source's frames is a zero
 			// rate, not an invisible absence.
 			if sa, ok := from.(*unix.SockaddrInet6); ok {
@@ -382,7 +385,7 @@ func (w *Worker) processFrame(raw []byte, src string) {
 // processBEEFFrame handles BRC-148 BEEF object frames (FrameVer 0x09),
 // cached by their (HashKey, SeqNum) flow key with the BEEF TTL. The
 // retransmit path re-derives the domain-tagged group from the frame's
-// TopicID at offset 56 — never from offset 8, which carries the ContentID.
+// TopicID at offset 56, never from offset 8, which carries the ContentID.
 func (w *Worker) processBEEFFrame(raw []byte, src string) {
 	bf, err := frame.DecodeBEEF(raw)
 	if err != nil {
@@ -463,8 +466,8 @@ func (w *Worker) processFragmentFrame(raw []byte, src string) {
 }
 
 // processBundleFrame handles BRC-142 bundle frames (FrameVer 0x08). A bundle is
-// cached opaquely by its (HashKey, SeqNum) flow key — identical to a BRC-124
-// frame — and retransmitted whole on NACK; the retry endpoint never parses
+// cached opaquely by its (HashKey, SeqNum) flow key (identical to a BRC-124
+// frame) and retransmitted whole on NACK; the retry endpoint never parses
 // members.
 func (w *Worker) processBundleFrame(raw []byte, src string) {
 	// A bundle is stored opaquely under its flow key, so only its header is
@@ -674,19 +677,19 @@ func (w *Worker) processAnchorFrame(raw []byte, src string) {
 }
 
 // RunTee opens the dedicated loopback tee-ingest socket and processes
-// mirrored datagrams until ctx is cancelled. Two forms are accepted:
+// mirrored datagrams until ctx is canceled. Two forms are accepted:
 //
 //   - teewire-enveloped (the listener's -retry-tee): the envelope carries the
 //     frame's original fabric source, which labels the per-source cache
-//     counters exactly as a natively received frame would — this is what
+//     counters exactly as a natively received frame would; this is what
 //     keeps the RetryCacheSourceStarved contract intact on a tee-fed cache.
 //   - raw frames (the proxy's -retry-tee form): locally-originated frames
-//     mirrored verbatim; labelled by the loopback datagram source.
+//     mirrored verbatim; labeled by the loopback datagram source.
 //
 // The socket binds listen EXCLUSIVELY (no SO_REUSEADDR/SO_REUSEPORT): unlike
 // the shared wildcard data port, unicast delivery here is deterministic, and a
 // bind conflict is a config error that must fail loudly. The listen address is
-// validated as loopback by config — the envelope asserts a source address and
+// validated as loopback by config: the envelope asserts a source address and
 // must never be accepted off-node.
 //
 // RunTee may run alongside Run (transition: both feeds active; duplicate
@@ -795,7 +798,7 @@ func (w *Worker) openRawSocket() (int, error) {
 	// The ingress is single-worker, so it does NOT need SO_REUSEPORT (which would only matter
 	// for same-EUID load-balancing). It uses SO_REUSEADDR alone: that is the cross-EUID
 	// bind path, so this socket can co-exist with a co-resident shard-listener (a DIFFERENT
-	// user, which keeps SO_REUSEPORT for its own workers) on a collapsed node — both receive
+	// user, which keeps SO_REUSEPORT for its own workers) on a collapsed node; both receive
 	// the multicast group. NB: declaring SO_REUSEPORT here would force the same-EUID check and
 	// defeat the SO_REUSEADDR cross-user share.
 	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
@@ -811,7 +814,7 @@ func (w *Worker) openRawSocket() (int, error) {
 	}
 	_ = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_RCVBUF, w.recvBufBytes())
 	// Scope this socket to the groups it actually joined. Linux-only knob; on other
-	// platforms the default behaviour already matches. See mcastall_linux.go.
+	// platforms the default behavior already matches. See mcastall_linux.go.
 	disableMulticastAll(fd)
 	sa := &unix.SockaddrInet6{Port: w.port}
 	if err := unix.Bind(fd, sa); err != nil {

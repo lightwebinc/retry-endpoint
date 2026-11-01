@@ -83,7 +83,7 @@ func TestProcessNACK_ThrottleResponse_ChainTier(t *testing.T) {
 }
 
 // TestProcessNACK_ThrottleResponse_GroupTier verifies the post-lookup group
-// tier returns a THROTTLED hint (group bucket) rather than ACK — a fake ACK
+// tier returns a THROTTLED hint (group bucket) rather than ACK: a fake ACK
 // would cancel the listener gap with no retransmit dispatched (silent loss).
 func TestProcessNACK_ThrottleResponse_GroupTier(t *testing.T) {
 	mc := newMockCache()
@@ -125,7 +125,7 @@ func TestProcessNACK_ThrottleResponse_GroupTier(t *testing.T) {
 }
 
 // TestProcessNACK_ThrottleResponse_IPTierStaysSilent verifies the IP flood tier
-// never answers, even with the throttle response enabled — so a spoofed-source
+// never answers, even with the throttle response enabled, so a spoofed-source
 // flood cannot be reflected.
 func TestProcessNACK_ThrottleResponse_IPTierStaysSilent(t *testing.T) {
 	mc := newMockCache()

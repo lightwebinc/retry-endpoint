@@ -1,4 +1,4 @@
-// Package metrics initialises an OpenTelemetry MeterProvider backed by both
+// Package metrics initializes an OpenTelemetry MeterProvider backed by both
 // a Prometheus exporter (for scraping) and an optional OTLP gRPC exporter
 // (for push-based delivery to any OTel-compatible backend).
 package metrics
@@ -59,13 +59,13 @@ type Recorder struct {
 	retransmits        metric.Int64Counter
 	unicastRetransmits metric.Int64Counter
 	retransmitDedup    metric.Int64Counter
-	responsesSent      metric.Int64Counter // labelled type={ack,miss}
+	responsesSent      metric.Int64Counter // labeled type={ack,miss}
 	responseSendErrors metric.Int64Counter
 
 	// NACK proxy metrics
 	proxyRequests      metric.Int64Counter
 	proxyRecovered     metric.Int64Counter
-	proxyFailed        metric.Int64Counter // labelled reason
+	proxyFailed        metric.Int64Counter // labeled reason
 	proxyInflightDedup metric.Int64Counter
 	proxyQueueDropped  metric.Int64Counter
 
@@ -347,7 +347,7 @@ func (r *Recorder) TeeDatagram(form string) {
 }
 
 // FrameCached counts a frame stored into the repair cache. source is the
-// frame's originating fabric source ("" when unknown) — the per-source series
+// frame's originating fabric source ("" when unknown); the per-source series
 // is what tells a retry starved of ONE source's frames apart from the healthy
 // own-source exclusion (which never has a series at all).
 func (r *Recorder) FrameCached(source string) {

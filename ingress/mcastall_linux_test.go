@@ -8,7 +8,7 @@ import (
 )
 
 // The socket must receive ONLY the groups this process joined. IPV6_MULTICAST_ALL
-// defaults to 1, which delivers anything joined anywhere on the host — on a
+// defaults to 1, which delivers anything joined anywhere on the host; on a
 // collapsed node that silently side-feeds this cache from the co-resident
 // listener's joins, so a retry reads healthy on a band it never joined and
 // own-source frames the roster excludes still arrive.

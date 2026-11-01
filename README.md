@@ -6,7 +6,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/lightwebinc/retry-endpoint.svg)](https://pkg.go.dev/github.com/lightwebinc/retry-endpoint)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-> Part of the [**BSV Layered Multicast**](https://github.com/lightwebinc/bsv-multicast) open-source project — see the main repository for the full architecture, design docs, and BRC specifications.
+> Part of the [**BSV Layered Multicast**](https://github.com/lightwebinc/bsv-multicast) open-source project; see the main repository for the full architecture, design docs, and BRC specifications.
 
 Caching endpoint for NACK-based retransmission in the BSV multicast pipeline.
 Receives BRC-124/BRC-128 frames from the multicast fabric, caches them, and retransmits
@@ -15,7 +15,7 @@ on demand to `shard-listener` nodes that detect sequence gaps.
 The cache can also (or instead) be fed over loopback by co-resident processes:
 `-tee-listen` accepts the proxy's `-retry-tee` mirror (own-origin frames, raw)
 and the listener's `-retry-tee` mirror (fabric-received frames, source-preserving
-`teewire` envelope). With `-mc-join-enabled=false` the endpoint runs tee-only —
+`teewire` envelope). With `-mc-join-enabled=false` the endpoint runs tee-only:
 no multicast join and no shared data-port bind at all. See
 [Configuration](docs/configuration.md) for the fail-closed rules.
 
@@ -33,15 +33,15 @@ shard-proxy ──multicast──▶ FF05::B:<shard>:9001
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — pipeline overview, ingress, cache, NACK server, retransmit, beacon, NACK bind address, package structure
-- [Configuration](docs/configuration.md) — all flags, environment variables, defaults, deployment examples
-- [Unified Component Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md) — `-log-format json`, `host.inventory`, `-trace-sampling`, runtime `/loglevel`
-- [BRC-126 — Retransmission Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md)
+- [Architecture](docs/architecture.md): pipeline overview, ingress, cache, NACK server, retransmit, beacon, NACK bind address, package structure
+- [Configuration](docs/configuration.md): all flags, environment variables, defaults, deployment examples
+- [Unified Component Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md): `-log-format json`, `host.inventory`, `-trace-sampling`, runtime `/loglevel`
+- [BRC-126 Retransmission Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md)
 - [BRC-124 Frame Format](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-124-frame-format.md)
 
 ## Dependencies
 
-- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common) — `frame`, `shard`, `seqhash`, and the modular `cache` backend (memory / redis / aerospike)
+- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common): `frame`, `shard`, `seqhash`, and the modular `cache` backend (memory / redis / aerospike)
 - Prometheus client + OpenTelemetry SDK
 
 ## Requirements
@@ -49,7 +49,7 @@ shard-proxy ──multicast──▶ FF05::B:<shard>:9001
 - Go 1.26.2 or later (the `go.mod` floor)
 - Linux (any modern kernel; `SO_REUSEADDR` cross-EUID co-bind) or FreeBSD
   (`SO_REUSEPORT` co-bind, which requires the co-resident listener to run as
-  the **same** uid — FreeBSD has no cross-EUID share)
+  the **same** uid; FreeBSD has no cross-EUID share)
 - IPv6 enabled on the multicast fabric interface
 - Multicast routing configured for the same scope as proxy and listeners
 
@@ -81,8 +81,8 @@ make help    # list targets
   -redis-addr redis.local:6379 \
   -nack-addr 2001:db8::24
 
-# SSM (RFC 4607) — Posture C. Requires PIM-SSM in the fabric and
-# raised net.ipv6.mld_max_msf. See bsv-multicast SSM Support Plan.
+# SSM (RFC 4607). Requires PIM-SSM in the fabric and a
+# raised net.ipv6.mld_max_msf. See the SSM section of bsv-multicast DESIGN.md.
 ./retry-endpoint \
   -mc-iface enp6s0 \
   -egress-iface enp6s0 \
@@ -114,7 +114,7 @@ A Kubernetes Helm chart is published from a dedicated chart repository:
 - Repository: [`charts/retry-endpoint`](https://github.com/lightwebinc/charts/tree/main/charts/retry-endpoint)
 - OCI (the only published form): `helm install retry-node-1 oci://ghcr.io/lightwebinc/charts/retry-endpoint` (add `--version` to pin a released chart)
 
-`config.nackAddr` is effectively required — the chart emits a `helm.sh/chart-warnings` annotation when empty. The chart does **not** bundle a Redis subchart; operators install Redis separately when `config.cacheBackend=redis`. See the chart README for the full reference.
+`config.nackAddr` is effectively required: the chart emits a `helm.sh/chart-warnings` annotation when empty. The chart does **not** bundle a Redis subchart; operators install Redis separately when `config.cacheBackend=redis`. See the chart README for the full reference.
 
 ## Releases
 

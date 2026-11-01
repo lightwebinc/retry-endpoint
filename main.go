@@ -47,13 +47,13 @@ import (
 //	GroupSubtreeGroupAnn   (0xFFFC) → SSMBootstrapSubtreeAnn (same source set)
 //	GroupBlockBroadcast    (0xFFFE) → SSMBootstrapManifest (block-bcast follows manifest emitters)
 //	data-plane shard groups        → SSMPublishersStatic (lab) or manifest
-//	                                  union (production — wired by the
+//	                                  union (production; wired by the
 //	                                  manifest consumer in a later iteration)
 //
 // excludeOwnSource drops the node's own source address from a roster before
 // it feeds (S,G) joins. A node must never join its own source on the PIM
 // interface: the MLD state installs an iif==oif mroute on a collapsed edge
-// and every originated frame re-enters the MFC until hop-limit death —
+// and every originated frame re-enters the MFC until hop-limit death;
 // measured ~60x egress amplification. Consequence: this process does not
 // receive own-node frames via multicast; a local mirror is required where
 // own-source completeness matters.
@@ -441,7 +441,7 @@ func run() error {
 				BEEF:    cfg.CacheTTLBEEF,
 			},
 			Rec: rec,
-			// Same modes the direct cache-hit path honours. Before this the
+			// Same modes the direct cache-hit path honors. Before this the
 			// recovery path multicast unconditionally, regardless of the beacon
 			// flags, and a requester on another node never got its frame.
 			Multicast: cfg.BeaconFlagsMulticast,
@@ -544,7 +544,7 @@ func run() error {
 	// metrics/NACK/beacon goroutines would keep the process looking healthy.
 	// Surface it as a non-zero exit so the supervisor restarts us and the
 	// failure is visible where operators look. The same applies to the tee
-	// ingest — on a tee-only node it is the cache's ONLY feed, and even
+	// ingest: on a tee-only node it is the cache's ONLY feed, and even
 	// alongside a multicast join its silent death would strand own-source
 	// (proxy tee) or unjoined-band (listener tee) coverage.
 	fatalCh := make(chan error, 1)

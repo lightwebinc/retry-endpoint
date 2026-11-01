@@ -35,7 +35,7 @@ func TestBuildDedupKey(t *testing.T) {
 	if got := r.buildDedupKey(make([]byte, 10)); got != nil {
 		t.Errorf("expected nil for short frame, got %v", got)
 	}
-	// Valid: copy bytes 40..55 — HashKey followed by SeqNum.
+	// Valid: copy bytes 40..55: HashKey followed by SeqNum.
 	raw := make([]byte, 56)
 	for i := 40; i < 56; i++ {
 		raw[i] = byte(i)
@@ -98,7 +98,7 @@ func TestRetransmit_DedupSuppresses(t *testing.T) {
 
 	eng := shard.New(0xFF05, shard.DefaultGroupID, 2)
 	r := New(eng, nil, 9001, time.Minute, rc, nil, false)
-	// No egress sockets opened — but dedup path runs first and the second call
+	// No egress sockets opened, but dedup path runs first and the second call
 	// must short-circuit before reaching the (empty) socket loop.
 
 	raw := make([]byte, 100)

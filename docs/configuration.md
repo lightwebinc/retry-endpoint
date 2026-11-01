@@ -1,4 +1,4 @@
-# retry-endpoint — Configuration Reference
+# retry-endpoint: Configuration Reference
 
 All parameters are accepted as CLI flags. Environment variables serve as
 fallbacks; hard-coded defaults apply when neither is present.
@@ -26,23 +26,32 @@ this to the number of shard groups. Values above the group count are trimmed to
 it. Linux only: elsewhere multicast reaches every socket bound to the port, so
 the setting stays at 1.
 
+### `-ingress-recv-buf-bytes` / `INGRESS_RECV_BUF_BYTES` (default: `67108864`, 64 MiB)
+
+`SO_RCVBUF` asked for each ingress socket, the multicast workers' and the
+tee's; the kernel clamps it at `net.core.rmem_max`, so raise that sysctl
+alongside. An origin's proxy flushes a whole object as one burst (a 4 MiB piece
+at a 9000-byte fragment MTU is about 4.7 MB) and the tee carries every fragment
+the listener receives, so the buffer must hold the burst or the cache misses
+exactly the frames a NACK will ask for.
+
 ### `-tee-listen` / `TEE_LISTEN` (default: empty = disabled)
 
 IPv6 loopback `host:port` literal (e.g. `[::1]:9002`) for the dedicated
 **tee-ingest socket**. Co-resident processes mirror frames into it over
 loopback UDP:
 
-- the proxy's `-retry-tee` — frames this node **originates** (raw form), which
+- the proxy's `-retry-tee`: frames this node **originates** (raw form), which
   the cache can never receive via multicast (own-source SSM joins are
   structurally excluded);
-- the listener's `-retry-tee` — frames this node **receives** from the fabric,
+- the listener's `-retry-tee`: frames this node **receives** from the fabric,
   wrapped in a `shard-common/teewire` envelope that carries the original
   datagram source so per-source cache counters (`bre_cache_stored_total`, the
   `RetryCacheSourceStarved` contract) attribute tee-fed frames exactly as
   natively received ones.
 
 The socket binds the address **exclusively** (no `SO_REUSEADDR`/`SO_REUSEPORT`),
-so unicast delivery is deterministic — unlike a tee aimed at the shared
+so unicast delivery is deterministic, unlike a tee aimed at the shared
 wildcard data port, where kernel demux between co-bound sockets picks one
 receiver unpredictably. Validation **fails closed** on any non-loopback
 address: the envelope asserts a source address, and accepting it off the
@@ -52,14 +61,14 @@ Accepted datagrams are counted in `bre_tee_datagrams_total{form="encap"|"raw"}`.
 ### `-mc-join-enabled` / `MC_JOIN_ENABLED` (default: `true`)
 
 When `false`, the endpoint performs **no multicast join and does not bind the
-wildcard data port at all** — tee-only ingest, the collapsed-node end-state
+wildcard data port at all**: tee-only ingest, the collapsed-node end-state
 that frees the shared `:9001` co-bind (on FreeBSD this is what ultimately
 removes the same-uid co-bind contract). Fails closed unless `-tee-listen` is
 set: with neither feed the cache never fills and every NACK is answered MISS
 while the process looks healthy.
 
-Flip it off only where BOTH tees are live on the node — the proxy's
-(own-origin coverage) and the listener's (remote-origin coverage) — and the
+Flip it off only where BOTH tees are live on the node, the proxy's
+(own-origin coverage) and the listener's (remote-origin coverage), and the
 listener joins every band this cache is expected to repair. A band the
 listener does not join is a band this cache silently stops covering.
 
@@ -71,7 +80,7 @@ Multicast scope nibble. Must match the proxy's and listeners' `-scope`.
 | -------- | ------ | --------------------------------------------------- |
 | `link`   | `FF02` | Same L2 segment only                                |
 | `site`   | `FF05` | Site-local; crosses routers within a site (default) |
-| `org`    | `FF08` | Organisation-wide                                   |
+| `org`    | `FF08` | Organization-wide                                   |
 | `global` | `FF0E` | Internet-wide                                       |
 
 ### `-mc-group-id` / `MC_GROUP_ID` (default: `0x000B`)
@@ -84,7 +93,7 @@ Default `0x000B` corresponds to the IANA-assigned Bitcoin allocation
 
 ## SSM (RFC 4607)
 
-See the [SSM Support Plan](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm).
+See the [Source-Specific Multicast design](https://github.com/lightwebinc/bsv-multicast/blob/main/DESIGN.md#source-specific-multicast-ssm).
 The retry-endpoint plays two roles under SSM: it **emits** NACK-discovery
 beacons (so listeners need to know `bindSource` to pre-declare it in
 their `ssm-bootstrap-beacon`), and it **consumes** the data plane
@@ -93,8 +102,9 @@ it joins). ASM is the default.
 
 ### `-source-mode` / `SOURCE_MODE` (default: `asm`)
 
-Addressing model. `ssm` derives the prefix via `shard.Prefix(SSM,
-scope)` → FF35 site / FF3E global; rejects ASM at global per RFC 8815.
+Addressing model. `asm` accepts every `-scope` value in the table above. `ssm`
+derives the prefix via `shard.Prefix(SSM, scope)`, FF35 at `site` and FF3E at
+`global`, and rejects any other `-scope`.
 
 ### `-bind-source` / `BIND_SOURCE` (default: `""`)
 
@@ -104,7 +114,7 @@ Each retry-endpoint replica MUST use a distinct `bindSource`.
 
 It also marks this endpoint's **own** source: that source is excluded from the
 cache's `(S,G)` join roster (`excludeOwnSource`) to avoid an endpoint joining its
-own feed. **Leave empty to cache the full roster including own** — required where
+own feed. **Leave empty to cache the full roster including own**, required where
 the endpoint must repair its own source (e.g. the collapsed PIM-SSM fabric, where
 the source node's cache is the last-resort repairer for that source's frames).
 
@@ -181,9 +191,9 @@ Cache storage backend. Valid values: `memory`, `redis`, `aerospike`.
 
 ### `-redis-addr` / `REDIS_ADDR` (default: empty)
 
-Redis-protocol address (Redis/Valkey/Dragonfly). Behaviour depends on `-cache-backend`:
+Redis-protocol address (Redis/Valkey/Dragonfly). Behavior depends on `-cache-backend`:
 
-| `-cache-backend` | `REDIS_ADDR` set | Behaviour                                                      |
+| `-cache-backend` | `REDIS_ADDR` set | Behavior                                                       |
 | ---------------- | ---------------- | ------------------------------------------------------------- |
 | `memory`         | no               | per-instance frames; no cross-instance dedup                  |
 | `memory`         | yes              | per-instance frames; Redis used **only** for `SET NX` dedup   |
@@ -201,7 +211,7 @@ Comma-separated Aerospike seed nodes (`host:port`, default port 3000). Required
 when `-cache-backend=aerospike`. The namespace and set are selected by
 `-aerospike-namespace` (default `cache`) and `-aerospike-set` (default `bre`);
 the namespace must be provisioned on the cluster. Aerospike expiration is in
-whole seconds with a 1s floor — all frame TTLs here satisfy that.
+whole seconds with a 1s floor; all frame TTLs here satisfy that.
 
 ### `-cache-dial-timeout` / `CACHE_DIAL_TIMEOUT` (default: `1s`) · `-cache-op-timeout` / `CACHE_OP_TIMEOUT` (default: `1s`)
 
@@ -237,20 +247,20 @@ opaquely on the tx hot path and reuse `-cache-ttl-tx` (`CACHE_TTL_TX`).
 
 Resolution order applied per frame type:
 
-1. explicit per-FrameVer flag/env (e.g. `CACHE_TTL_BLOCK=15m`) — wins
-2. else, explicit `CACHE_TTL` — overrides the differentiated default
+1. explicit per-FrameVer flag/env (e.g. `CACHE_TTL_BLOCK=15m`) wins
+2. else, explicit `CACHE_TTL` overrides the differentiated default
 3. else, the differentiated default above
 
-Every per-FrameVer TTL — the four collapse-set values (tx, block, subtree,
-anchor) **and** `-cache-ttl-beef` — must be strictly positive; the process
+Every per-FrameVer TTL, the four collapse-set values (tx, block, subtree,
+anchor) **and** `-cache-ttl-beef`, must be strictly positive; the process
 exits at startup if any resolves to zero or a negative duration.
 `-cache-ttl-beef` still sits outside the `CACHE_TTL` collapse (it is never
 overridden by it); only the positivity check is shared.
 
 ### `-cache-max-keys` / `CACHE_MAX_KEYS` (default: `0`)
 
-Maximum number of keys in the in-memory cache (0 = no limit). Ignored when
-`-cache-backend redis`. The cap is enforced per shard (64 shards). When a shard
+Maximum number of keys in the in-memory cache (0 = no limit). Ignored by the
+`redis` and `aerospike` backends. The cap is enforced per shard (64 shards). When a shard
 is full, expired entries go first, then the entry closest to its expiry, so a
 frame a pending repair may still need is never evicted while an older one
 remains. Expired entries are removed within about 250 ms of their deadline, so
@@ -324,15 +334,16 @@ UDP destination port for retransmitted frames. Must match the listeners'
 Set `IPV6_MULTICAST_LOOP` on the retransmit egress socket(s). **Required on a
 collapsed / mesh router node** where retransmit egress rides a dummy `mc-local`
 interface: the kernel only submits locally-originated multicast to the multicast
-forwarding cache (MFC) — for fan-out onto the outbound tunnels — when loopback is
+forwarding cache (MFC), for fan-out onto the outbound tunnels, when loopback is
 enabled. Mirrors shard-proxy's `EGRESS_MULTICAST_LOOP`. Leave off on a normal
 node with a real fabric NIC.
 
 ### `-dedup-window` / `DEDUP_WINDOW` (default: `60s`)
 
-Cross-instance retransmission deduplication window. When `-cache-backend redis`,
-the first endpoint to serve a NACK claims the frame with a Redis `SET NX` for
-this duration. Other endpoints with the same request skip their send.
+Cross-instance retransmission deduplication window. With a shared dedup backend
+(`-cache-backend redis`/`aerospike`, or `-redis-addr` alongside `memory`), the
+first endpoint to serve a NACK claims the frame with a `SET NX` for this
+duration. Other endpoints with the same request skip their send.
 
 Set to match or exceed `-cache-ttl` to prevent double-retransmit on cache miss.
 
@@ -350,22 +361,22 @@ emitted" hole for a downstream domain. See the architecture doc's
 the mechanism for a PEER FABRIC across an interconnect: a listener only NACKs
 caches it discovered by beacon, so when the loss is UPSTREAM of beacon scope every
 reachable cache is missing exactly the frames requested and answers MISS. Deeper
-escalation cannot help — reach, not depth, is the limit. Measured on a 2-region
-lab before this was configured: **491 NACKs, 491 cache misses, zero retransmits**,
-while the origin region held complete copies and was never asked.
+escalation cannot help; reach, not depth, is the limit. The signature is every
+NACK a cache miss and zero retransmits, while the origin fabric holds complete
+copies and is never asked.
 
 **The fetch socket must be source-bound to the fabric address the firewall
 admits.** The client binds the resolved NACK address for this reason. If it
 instead uses a wildcard bind, a node that also holds a transit/interconnect
-address will source from THAT address, and the upstream's unicast reply — now
-addressed outside the allow-listed retry set — is dropped by the **upstream's**
+address will source from THAT address, and the upstream's unicast reply,
+addressed outside the allow-listed retry set, is dropped by the **upstream's**
 egress chain.
 
 **Diagnosing a failed fetch: read BOTH ends.** The downstream signature is a bare
 timeout (`bre_proxy_failed_total` == `bre_proxy_requests_total`) with nothing
 logged locally, while the upstream simultaneously reports a cache HIT, a response
 sent, and ZERO unicast retransmits. That combination means the reply was generated
-and then dropped — not that the frame was missing — and the error text
+and then dropped, not that the frame was missing, and the error text
 (`sendto: operation not permitted`) exists only in the upstream's log.
 
 ### `-proxy-enabled` / `PROXY_ENABLED` (default: `false`)
@@ -404,7 +415,7 @@ when full, since the requester already received MISS and will retry/escalate.
 
 > **Upstream rate limits:** all proxied NACKs share this endpoint's source IP.
 > The upstream's per-IP limiter (`-rl-ip-rate`) may throttle a large recovery
-> burst — raise it or exempt proxy source IPs upstream.
+> burst; raise it or exempt proxy source IPs upstream.
 
 ---
 
@@ -415,7 +426,7 @@ per-group (post-lookup, cache hits only). All four tiers drop silently by
 default. With `-rl-throttle-response` the honest-congestion tiers (SeqNum,
 chain, group) answer with a 16-byte THROTTLED hint instead; the per-IP flood
 tier never answers (reflection guard). The group tier never sends ACK on
-throttle — an ACK would cancel the listener gap with no retransmit dispatched.
+throttle: an ACK would cancel the listener gap with no retransmit dispatched.
 
 ### `-rl-ip-rate` / `RL_IP_RATE` (default: `100`)
 
@@ -428,8 +439,8 @@ sustained rate before limiting kicks in.
 
 ### `-rl-sequence-max` / `RL_SEQUENCE_MAX` (default: `100`)
 
-Maximum number of requests for the same `(HashKey, SeqNum)` pair — one flow's
-missing frame — within `-rl-sequence-window`. Prevents a single stuck listener
+Maximum number of requests for the same `(HashKey, SeqNum)` pair (one flow's
+missing frame) within `-rl-sequence-window`. Prevents a single stuck listener
 from flooding the server with repeated NACKs for the same gap. The bucket is
 scoped to the flow, not the bare `SeqNum`: every flow's counter starts at 1,
 so a bare-`SeqNum` bucket would let a few junk NACKs for a low sequence number
@@ -467,7 +478,7 @@ Token replenishment rate for the per-`(srcIP, groupIdx)` retransmit limiter
 (tokens per second). Applied **post-lookup** on cache hits only. When the bucket
 is exhausted the retransmit is suppressed and the request is answered like the
 other honest-congestion tiers: THROTTLED with `-rl-throttle-response`, silence
-otherwise (never ACK — an ACK would cancel the listener gap with nothing sent).
+otherwise (never ACK: an ACK would cancel the listener gap with nothing sent).
 
 ### `-rl-group-burst` / `RL_GROUP_BURST` (default: `50`)
 
@@ -484,7 +495,7 @@ the gap for the hinted backoff (`125 ms << bucket`) and retries the **same**
 endpoint without escalating or consuming its retry budget. The per-IP flood tier
 **never** answers (it sheds spoofed-source load and a reply would permit
 reflection). Optional load-shedding refinement for high-fan-out deployments; see
-[BRC-126 — Retransmission Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md).
+[BRC-126 Retransmission Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md).
 
 ---
 
@@ -493,7 +504,7 @@ reflection). Optional load-shedding refinement for high-fan-out deployments; see
 ### `-beacon-enabled` / `BEACON_ENABLED` (default: `true`)
 
 Periodically multicast a 56-byte ADVERT datagram to the beacon group so
-listeners can discover this endpoint dynamically. See [BRC-126 — Retransmission
+listeners can discover this endpoint dynamically. See [BRC-126 Retransmission
 Protocol](https://github.com/lightwebinc/bsv-multicast/blob/main/docs/brc-126-retransmission-protocol.md).
 
 When `false`, the endpoint is reachable only via static `-retry-endpoints` seeds
@@ -509,8 +520,8 @@ range is `0`–`254`: `0xFF` is RESERVED as the static-seed sentinel and is
 rejected at config load.
 
 **Set this deliberately.** Leaving every endpoint at the default `0` makes the
-whole fleet claim source-adjacency, so `(Tier, Preference)` ties everywhere and —
-because the listener's registry sort is not stable — the escalation ORDER becomes
+whole fleet claim source-adjacency, so `(Tier, Preference)` ties everywhere and,
+because the listener's registry sort is not stable, the escalation ORDER becomes
 arbitrary and unrepeatable between runs, which also invalidates before/after
 recovery comparisons.
 
@@ -518,7 +529,7 @@ recovery comparisons.
 is not a distance signal: interconnects are bidirectional, so every meshed fabric
 imports its peers and such a rule stamps the same tier on the receiver AND the
 true origin. With ingress possible in any region, no fabric-level fact fixes
-distance-to-source — which is why the spec makes Tier per-endpoint operator
+distance-to-source, which is why the spec makes Tier per-endpoint operator
 policy.
 
 ### `-beacon-preference` / `BEACON_PREFERENCE` (default: `128`)
@@ -542,20 +553,20 @@ take the source-specific `FF3x` prefix under SSM.
 | Value            | ASM group(s)     | SSM group(s)     | Use case                                                        |
 | ---------------- | ---------------- | ---------------- | --------------------------------------------------------------- |
 | `site`           | `FF05::B:FFFD`   | `FF35::B:FFFD`   | All listeners on the local site                                 |
-| `org`            | `FF08::B:FFFD`   | —                | Organisation-wide discovery                                     |
+| `org`            | `FF08::B:FFFD`   | none             | Organization-wide discovery                                     |
 | `global`         | `FF0E::B:FFFD`   | `FF3E::B:FFFD`   | Inter-AS via MP-BGP MVPN                                        |
-| `both` / `all`   | all three groups | —                | Site + org + global simultaneously (three ADVERTs per interval)  |
+| `both` / `all`   | all three groups | none             | Site + org + global simultaneously (three ADVERTs per interval)  |
 
 `both` and `all` are synonyms: they set the ADVERT wire scope byte to `0xFF`
 and emit one ADVERT to each of the three groups per interval.
 
 BRC-129 tables an SSM control group at site and global scope only, so `org`
-— and therefore `both` / `all`, which cover it — has no source-specific
+(and therefore `both` / `all`, which cover it) has no source-specific
 form. With `-control-group-compat derived`, combining any of them with
 `-source-mode ssm` is a startup error rather than a silent fall back to
 `FF08`: use `-beacon-scope site` and/or a second instance at
-`-beacon-scope global`. With `asm-only` or `both` they keep working exactly
-as today (`both` at `all` scope adds `FF35` and `FF3E` and leaves `FF08`
+`-beacon-scope global`. With `asm-only` or `both` they keep working
+unchanged (`both` at `all` scope adds `FF35` and `FF3E` and leaves `FF08`
 alone), so a binary upgrade at default settings can never fail to start.
 
 The ADVERT wire scope byte is unaffected: an ADVERT sent to `FF35::B:FFFD`
@@ -564,20 +575,20 @@ still carries scope byte `0x05`. SSM changes the address, not the format.
 ### `-control-group-compat` / `CONTROL_GROUP_COMPAT` (default: `asm-only`)
 
 Which multicast prefix the control-plane group at BRC-129 index `0xFFFD`
-— the beacon group this endpoint advertises into — is derived from.
+(the beacon group this endpoint advertises into) is derived from.
 
 | Value | Advertises into |
 |-------|-----------------|
-| `asm-only` (default) | Always the any-source `FF0x` form, ignoring `-source-mode`. Pre-fix behaviour. |
+| `asm-only` (default) | Always the any-source `FF0x` form, ignoring `-source-mode`; the same wire as an endpoint without this flag. |
 | `both` | Both the `FF0x` form and the `-source-mode`-derived form where one exists (one ADVERT to each per interval). |
 | `derived` | The `-source-mode`-derived form only: `FF3x` under `-source-mode ssm`. BRC-126/129 conformant. |
 
 Under `-source-mode asm` all three collapse to the same `FF0x` prefixes, so
 the flag does nothing in an ASM deployment.
 
-**This is a flag day.** Releases before this one always advertised into the
-any-source prefix, even under `-source-mode ssm` — while the data plane in
-the same process derived `FF3x` correctly. A listener joined to
+**This is a flag day.** An endpoint without this flag advertises into the
+any-source prefix whatever `-source-mode` says, while its data plane derives
+`FF3x`. A listener joined to
 `FF35::B:FFFD` hears nothing from an endpoint still advertising into
 `FF05::B:FFFD`, and an ADVERT that lands on the wrong group raises no error
 anywhere: the symptom is that listeners' endpoint registries simply stay
@@ -586,8 +597,8 @@ empty and every NACK falls back to the static seeds.
 The default is `asm-only` precisely so that upgrading retry endpoints is
 safe on its own: the binary changes, the wire does not.
 
-**Rollout order** — the other sender is `shard-manifest`; the receivers are
-`shard-listener` and `shard-proxy`:
+**Rollout order** (the other sender is `shard-manifest`; the receivers are
+`shard-listener` and `shard-proxy`):
 
 1. Roll every **receiver** (shard-listener, shard-proxy). Their default is
    `both`, so they join the legacy and the conformant group together.
@@ -605,11 +616,10 @@ for a fleet that is knowingly mixed and does not want a second converge.
 Under `-source-mode ssm` a fabric's multicast routes and PIM/smcroute group
 ranges are usually derived from the source mode too, and so cover
 `ff35::/16` and `ff3e::/16` but not `ff05::/16`. The legacy leg of `both`
-therefore reaches only same-segment listeners on such a fabric — which is
-all it reached before this fix as well. Check that anything keyed on the
-group prefix rather than on `ff00::/8` — multicast routes, PIM/smcroute
-group ranges, MLD snooping filters, narrowed firewall rules — covers the SSM
-block before moving off `asm-only`.
+therefore reaches only same-segment listeners on such a fabric. Check that
+anything keyed on the group prefix rather than on `ff00::/8` (multicast routes,
+PIM/smcroute group ranges, MLD snooping filters, narrowed firewall rules)
+covers the SSM block before moving off `asm-only`.
 
 ### `-beacon-flags-multicast` / `BEACON_FLAGS_MULTICAST` (default: `true`)
 
@@ -623,19 +633,19 @@ Advertise unicast retransmit support. When enabled, the NACK server sends the
 raw frame directly back to the requesting listener via the source address of the
 incoming NACK datagram. This guarantees delivery to the specific listener without
 relying on multicast fabric propagation. Can be enabled alongside multicast
-retransmit — both fire for the same NACK when both flags are set.
+retransmit; both fire for the same NACK when both flags are set.
 
-**Repair mode — prefer unicast-back generally, not just on a collapsed fabric.**
+**Repair mode: prefer unicast-back generally, not just on a collapsed fabric.**
 Set `BEACON_FLAGS_UNICAST=true` **and** `BEACON_FLAGS_MULTICAST=false` as the
-default posture, for two reasons independent of topology: (1) only a
-unicast-flagged ACK makes a repair VERIFIABLE — a bare ACK lets the listener close
+deployed posture, for two reasons independent of topology: (1) only a
+unicast-flagged ACK makes a repair VERIFIABLE; a bare ACK lets the listener close
 the gap on trust, so a repair lost on the same degraded link is never retried and
 the loss goes unreported; (2) a multicast repair is delivered to every listener in
 the group, so members that lost nothing are metered for the bytes.
 
 One instance of (1) is a **collapsed PIM-SSM fabric**, where multicast
-re-injection cannot repair a *remote* receiver at all — PIM-SSM RPF lets only the
-source node inject into its own `(S,G)` tree — so unicast is the only working
+re-injection cannot repair a *remote* receiver at all (PIM-SSM RPF lets only the
+source node inject into its own `(S,G)` tree), so unicast is the only working
 return channel. Pair this with **no `-bind-source`** so the cache holds its own
 source too (the origin becomes the last-resort repairer), and the consumer
 listener must bind its NACK socket to a routable `/128` or the unicast reply
@@ -670,9 +680,10 @@ duration. Useful for rolling restarts behind a load balancer.
 
 HTTP bind address for:
 
-- `GET /metrics` — Prometheus scrape endpoint (`bre_` prefix)
-- `GET /healthz` — always `200 OK` while the process is running
-- `GET /readyz` — `200` when ready; `503` while starting or draining
+- `GET /metrics`: Prometheus scrape endpoint (`bre_` prefix)
+- `GET /healthz`: always `200 OK` while the process is running
+- `GET /readyz`: `200` when ready; `503` while starting or draining
+- `POST /loglevel?level=<lvl>`: runtime log level (see `-log-level`)
 
 ### `-instance` / `INSTANCE_ID` (default: hostname)
 
@@ -718,6 +729,7 @@ and a `bre_host_info` gauge.
 | `bre_frames_received_total`                                      | Frames received from multicast fabric                               |
 | `bre_frames_dropped_total{reason}`                               | Frames dropped, by reason                                           |
 | `bre_frames_cached_total`                                        | Frames successfully written to cache                                |
+| `bre_tee_datagrams_total{form=encap\|raw}`                      | Datagrams accepted on the loopback tee socket, by form              |
 | `bre_cache_stored_total{source}`                                 | Frames cached, by originating fabric source (see note below)        |
 | `bre_own_source_info{source}`                                    | This node's own source address (always 1); it never joins this one  |
 | `bre_cache_size`                                                 | Current cache size (gauge)                                          |
@@ -729,7 +741,7 @@ and a `bre_host_info` gauge.
 | `bre_unicast_retransmits_total`                                  | Frames sent unicast back to the NACK requester                      |
 | `bre_responses_sent_total`                                       | ACK/MISS responses successfully written to the NACK socket          |
 | `bre_response_send_errors_total`                                 | ACK/MISS responses that failed to send (`WriteTo` error)            |
-| `bre_retransmit_dedup_total`                                     | Retransmits skipped by cross-instance dedup (requires `REDIS_ADDR`) |
+| `bre_retransmit_dedup_total`                                     | Retransmits skipped by cross-instance dedup (shared dedup backend)  |
 | `bre_rate_limit_drops_total{level=ip\|chain\|sequence\|group}`   | Requests dropped (or retransmit suppressed) by rate limiter tier    |
 | `bre_proxy_requests_total`                                       | Cross-domain proxy recovery jobs started                            |
 | `bre_proxy_recovered_total`                                      | Frames recovered from upstream and re-cached                        |
@@ -742,7 +754,7 @@ and a `bre_host_info` gauge.
 
 `bre_cache_stored_total` is pre-created at `0` for every source this endpoint
 joins, so a retry starved of one source reads as a zero *rate* rather than a
-missing series — that is what lets an alert tell "receiving nothing from S"
+missing series; that is what lets an alert tell "receiving nothing from S"
 apart from "never configured for S".
 
 The roster it is pre-created from excludes this node's **own** source: joining
@@ -751,12 +763,12 @@ re-enters the forwarding cache until hop-limit death (~60x egress
 amplification). The endpoint therefore cannot cache its own frames at all.
 
 That exclusion does **not** guarantee the own-source series is absent. Frames
-are labelled on the data path with no roster check, so a single leaked
+are labeled on the data path with no roster check, so a single leaked
 own-source frame creates the pair at a count that then never moves. By rate
 alone that is indistinguishable from real starvation. The ingress socket
 disables `IPV6_MULTICAST_ALL` (the kernel default delivers every group joined
 anywhere on the host to a wildcard-bound socket, so a co-located listener's
-joins used to side-feed this cache), which closes the known leak path;
+joins would otherwise side-feed this cache), which closes the known leak path;
 `bre_own_source_info` publishes the address so a consumer can subtract exactly
 that pair (`unless on(site, source)`) even on a binary or kernel without the
 sockopt, without blinding itself to genuine starvation on any other source.
@@ -825,7 +837,7 @@ retry-endpoint \
 
 Every flag documented in this file is exposed under `.config` in the corresponding Helm chart's `values.yaml`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
 
-Chart: [`charts/retry-endpoint`](https://github.com/lightwebinc/charts/tree/main/charts/retry-endpoint) — `config.nackAddr` is effectively required; no Redis subchart bundled.
+Chart: [`charts/retry-endpoint`](https://github.com/lightwebinc/charts/tree/main/charts/retry-endpoint): `config.nackAddr` is effectively required; no Redis subchart bundled.
 
 ## BRC-148 BEEF object plane
 
@@ -836,7 +848,8 @@ Chart: [`charts/retry-endpoint`](https://github.com/lightwebinc/charts/tree/main
 | `-cache-ttl-beef` / `CACHE_TTL_BEEF` | `60s` | V9 cache TTL (live-tail resend window); independent of the `CACHE_TTL` collapse |
 
 V9 frames cache under the standard HashKey ∥ SeqNum key; the retransmit
-target is re-derived from the **TopicID at offset 56** (never offset 8 — the
-ContentID is not a shard key). BRC-130 fragments now cache individually as
-well (TTL per `OrigFrameVer`, incl. V9) and retransmit per the fragmented
-class; the listener now NACKs interior fragment loss (shard-listener), so pushed-object fragment recovery is end-to-end (tail-only loss still relies on reassembly timeout).
+target is re-derived from the **TopicID at offset 56** (never offset 8; the
+ContentID is not a shard key). BRC-130 fragments cache individually as well
+(TTL per `OrigFrameVer`, V9 included) and retransmit per the fragmented class;
+the listener NACKs fragment loss, so pushed-object fragment recovery is
+end-to-end.

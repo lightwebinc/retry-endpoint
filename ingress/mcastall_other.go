@@ -7,8 +7,8 @@ package ingress
 //
 // IPV6_MULTICAST_ALL is a Linux extension. Linux's default of 1 delivers every
 // group joined ANYWHERE on the host to a wildcard-bound socket, which is the
-// behaviour mcastall_linux.go turns OFF. FreeBSD has no such option because it
-// never had that behaviour: a socket receives only the groups it joined, which
+// behavior mcastall_linux.go turns OFF. FreeBSD has no such option because it
+// never had that behavior: a socket receives only the groups it joined, which
 // is precisely the end state the Linux call is reaching for.
 //
 // So the semantics match; only the knob is absent. Doing nothing here leaves the

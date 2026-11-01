@@ -27,7 +27,7 @@ func testIface(t *testing.T) string {
 }
 
 // loadWithArgs resets the global flag state and invokes Load with the given
-// CLI args. Not safe for t.Parallel — relies on process-global flag state.
+// CLI args. Not safe for t.Parallel; relies on process-global flag state.
 func loadWithArgs(t *testing.T, args ...string) (*Config, error) {
 	t.Helper()
 	origArgs := os.Args

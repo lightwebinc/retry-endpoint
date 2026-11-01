@@ -175,7 +175,7 @@ func buildRawVer(ver byte, hashKey, seqNum uint64) []byte {
 	binary.BigEndian.PutUint16(buf[4:6], frame.ProtoVer)
 	buf[6] = ver
 	buf[7] = 0x00
-	// TxID/ContentID/SubtreeID at [8:40] — leave zeros, set first byte for variety
+	// TxID/ContentID/SubtreeID at [8:40]: leave zeros, set first byte for variety
 	buf[8] = 0xAB
 	binary.BigEndian.PutUint64(buf[40:48], hashKey)
 	binary.BigEndian.PutUint64(buf[48:56], seqNum)

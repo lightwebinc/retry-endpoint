@@ -367,7 +367,7 @@ func TestRecover_BothModes(t *testing.T) {
 // Two DIFFERENT requesters NACKing the SAME gap must BOTH be served in unicast mode.
 //
 // Regression test. The in-flight claim keys the gap (hashKey||seq) so sibling endpoints
-// do not all fetch it from upstream. That is correct while recovery MULTICASTS — one
+// do not all fetch it from upstream. That is correct while recovery MULTICASTS: one
 // winner's retransmit reaches everyone. Once recovery started unicasting to the
 // requester, a gap-only key meant the loser of the race received NOTHING and had to wait
 // out its own NACK timeout. Devnet masked this by running CACHE_BACKEND=memory, where the
