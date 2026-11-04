@@ -215,7 +215,12 @@ frame to the cache with the configured TTL. On Linux the socket turns
 is cached twice; elsewhere multicast reaches every socket bound to the port, so
 the worker count stays at 1. Every ingress socket asks for the receive buffer
 set by `-ingress-recv-buf-bytes` (64 MiB default), sized to hold a proxy's
-whole-object burst. Group memberships are re-asserted every 30 s
+whole-object burst. Each socket (the tee's too) is drained by one goroutine
+that receives in batches (`recvmmsg` on Linux) into a ring of reusable buffers
+and queues each datagram (`-ingress-queue-depth`) to one of
+`-ingress-procs` processing goroutines, chosen by the frame's cache key, so
+every write of one key keeps its arrival order. A queue that stays full for
+100 ms drops the datagram as `bre_frames_dropped_total{reason="queue_full"}`. Group memberships are re-asserted every 30 s
 for the life of the socket: a kernel membership can be lost underneath a running
 socket when the forwarding state it depends on changes (a multicast RPF move
 after a routing re-convergence, a forwarder restart, an interface rebuild) with

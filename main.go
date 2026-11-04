@@ -464,6 +464,7 @@ func run() error {
 	for i, gs := range parts {
 		ings[i] = ingress.New(mcIface, cfg.ListenPort, gs, c, rec, ttls, cfg.Debug)
 		ings[i].SetRecvBuf(cfg.RecvBufBytes)
+		ings[i].SetPipeline(cfg.QueueDepth, cfg.IngressProcs)
 	}
 	ing := ings[0]
 	rec.SetWorkers(len(ings))
