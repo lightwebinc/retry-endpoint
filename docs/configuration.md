@@ -35,6 +35,24 @@ at a 9000-byte fragment MTU is about 4.7 MB) and the tee carries every fragment
 the listener receives, so the buffer must hold the burst or the cache misses
 exactly the frames a NACK will ask for.
 
+### `-ingress-queue-depth` / `INGRESS_QUEUE_DEPTH` (default: `1024`)
+
+Datagrams queued between an ingress socket's receive loop and its processing
+goroutines, per socket (multicast workers and tee alike). The receive loop
+drains the socket in batches (`recvmmsg` on Linux) into reusable buffers and
+never decodes or stores, so the kernel buffer keeps emptying while frames are
+processed. When the queue stays full for 100 ms the datagram is dropped and
+counted as `bre_frames_dropped_total{reason="queue_full"}`; until then the
+kernel buffer absorbs the burst.
+
+### `-ingress-procs` / `INGRESS_PROCS` (default: `4`)
+
+Processing goroutines per ingress socket. Each datagram goes to the goroutine
+chosen by its cache key (HashKey, SeqNum), so every write of one key is made in
+arrival order, while a single flow still spreads across all of them. On a
+loopback benchmark with `GOMAXPROCS=4` and 9000-byte datagrams, one goroutine
+held about 140k datagrams per second and four held 250k without loss.
+
 ### `-tee-listen` / `TEE_LISTEN` (default: empty = disabled)
 
 IPv6 loopback `host:port` literal (e.g. `[::1]:9002`) for the dedicated
@@ -727,7 +745,7 @@ and a `bre_host_info` gauge.
 | Metric                                                           | Description                                                         |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `bre_frames_received_total`                                      | Frames received from multicast fabric                               |
-| `bre_frames_dropped_total{reason}`                               | Frames dropped, by reason                                           |
+| `bre_frames_dropped_total{reason}`                               | Frames dropped, by reason (`queue_full`, `truncated`, `decode_error`, `tee_decap_error`) |
 | `bre_frames_cached_total`                                        | Frames successfully written to cache                                |
 | `bre_tee_datagrams_total{form=encap\|raw}`                      | Datagrams accepted on the loopback tee socket, by form              |
 | `bre_cache_stored_total{source}`                                 | Frames cached, by originating fabric source (see note below)        |
