@@ -24,7 +24,9 @@
 //
 // # Hot path per frame
 //
-//  1. Recvfrom (SO_RCVBUF per [Worker.SetRecvBuf]; 64 MiB default)
+//  1. Receive in batches (recvmmsg on Linux; SO_RCVBUF per
+//     [Worker.SetRecvBuf], 64 MiB default) into reusable slots, queued to a
+//     processing goroutine chosen by cache key (see pipeline.go)
 //  2. frame.Decode: extract HashKey, SeqNum
 //  3. Drop if SeqNum == 0 (proxy has not stamped the frame)
 //  4. Store: key = HashKey(8B) || SeqNum(8B) → raw frame
@@ -47,16 +49,12 @@ import (
 	"github.com/lightwebinc/shard-common/bundle"
 	"github.com/lightwebinc/shard-common/frame"
 	"github.com/lightwebinc/shard-common/netjoin"
-	"github.com/lightwebinc/shard-common/teewire"
 
 	"github.com/lightwebinc/retry-endpoint/cache"
 	"github.com/lightwebinc/retry-endpoint/metrics"
 )
 
-const (
-	recvBufSize   = 4 * 1024 * 1024  // per-worker UDP receive buffer
-	socketRecvBuf = 64 * 1024 * 1024 // 64 MiB
-)
+const socketRecvBuf = 64 * 1024 * 1024 // 64 MiB
 
 // TTLConfig configures per-FrameVer cache TTLs applied by the ingress
 // worker. Each field corresponds to a frame type the retry endpoint may
@@ -105,7 +103,10 @@ type Worker struct {
 	ttls    TTLConfig
 	debug   bool
 	recvBuf int // SO_RCVBUF asked for this worker's sockets; 0 = socketRecvBuf
-	log     *slog.Logger
+	// Receive pipeline per socket (see pipeline.go); 0 = default.
+	queueDepth int
+	procs      int
+	log        *slog.Logger
 }
 
 // SetRecvBuf sets the receive buffer asked for the worker's multicast socket
@@ -248,47 +249,8 @@ func (w *Worker) Run(ctx context.Context) error {
 	// cadence rather than trusting it to persist.
 	go w.reassertJoins(ctx, fd)
 
-	buf := make([]byte, recvBufSize)
-	// The source address is formatted once per change of source, not once per
-	// frame: a fabric has a handful of sources and each sends in long runs.
-	var lastSrc [16]byte
-	src := ""
-	for {
-		n, from, err := unix.Recvfrom(fd, buf, 0)
-		if err != nil {
-			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
-				if ctx.Err() != nil {
-					return nil
-				}
-				continue
-			}
-			if err == unix.EBADF || err == unix.EINVAL {
-				return nil
-			}
-			if err == unix.EINTR {
-				continue
-			}
-			if ctx.Err() != nil {
-				return nil
-			}
-			w.log.Error("recvfrom error", "err", err)
-			continue
-		}
-		if n > 0 {
-			// The datagram's source address IS the fabric source of the frame
-			// (SSM: one (S,G) per publisher); it labels the per-source cache
-			// counters so a retry starved of ONE source's frames is a zero
-			// rate, not an invisible absence.
-			if sa, ok := from.(*unix.SockaddrInet6); ok {
-				if src == "" || sa.Addr != lastSrc {
-					lastSrc, src = sa.Addr, netip.AddrFrom16(sa.Addr).String()
-				}
-				w.processFrame(buf[:n], src)
-			} else {
-				w.processFrame(buf[:n], "")
-			}
-		}
-	}
+	w.receive(ctx, fd, false)
+	return nil
 }
 
 func (w *Worker) processFrame(raw []byte, src string) {
@@ -717,61 +679,8 @@ func (w *Worker) RunTee(ctx context.Context, listen netip.AddrPort) error {
 		_ = unix.Close(fd)
 	}()
 
-	buf := make([]byte, recvBufSize)
-	for {
-		n, from, err := unix.Recvfrom(fd, buf, 0)
-		if err != nil {
-			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
-				if ctx.Err() != nil {
-					return nil
-				}
-				continue
-			}
-			if err == unix.EBADF || err == unix.EINVAL {
-				return nil
-			}
-			if err == unix.EINTR {
-				continue
-			}
-			if ctx.Err() != nil {
-				return nil
-			}
-			w.log.Error("tee recvfrom error", "err", err)
-			continue
-		}
-		if n == 0 {
-			continue
-		}
-		pkt := buf[:n]
-		if teewire.IsEncap(pkt) {
-			src, payload, derr := teewire.Decap(pkt)
-			if derr != nil {
-				if w.rec != nil {
-					w.rec.FrameDropped("tee_decap_error")
-				}
-				if w.debug {
-					w.log.Debug("tee decap error", "err", derr, "len", n)
-				}
-				continue
-			}
-			if w.rec != nil {
-				w.rec.TeeDatagram("encap")
-			}
-			w.processFrame(payload, src.Addr().String())
-			continue
-		}
-		// Raw form: the proxy mirrors its own egress verbatim. Label with the
-		// datagram source (loopback), the same value a wildcard-bound data
-		// socket would have seen for it.
-		src := ""
-		if sa, ok := from.(*unix.SockaddrInet6); ok {
-			src = netip.AddrFrom16(sa.Addr).String()
-		}
-		if w.rec != nil {
-			w.rec.TeeDatagram("raw")
-		}
-		w.processFrame(pkt, src)
-	}
+	w.receive(ctx, fd, true)
+	return nil
 }
 
 // openTeeSocket binds an exclusive AF_INET6 UDP socket on the given loopback
