@@ -164,6 +164,8 @@ type Config struct {
 	// Runtime
 	NumWorkers   int           // Worker goroutines for multicast ingress (-ingress-workers)
 	RecvBufBytes int           // SO_RCVBUF asked for each ingress socket, multicast and tee (-ingress-recv-buf-bytes)
+	QueueDepth   int           // Datagrams queued between receive and processing, per ingress socket (-ingress-queue-depth)
+	IngressProcs int           // Processing goroutines per ingress socket (-ingress-procs)
 	Debug        bool          // Enable per-packet debug logging
 	DrainTimeout time.Duration // Pre-drain delay before closing sockets
 
@@ -266,6 +268,10 @@ func Load() (*Config, error) {
 
 	flag.IntVar(&c.RecvBufBytes, "ingress-recv-buf-bytes", envInt("INGRESS_RECV_BUF_BYTES", 64<<20),
 		"receive buffer asked for each ingress socket, the multicast workers' and the tee's (SO_RCVBUF, clamped by net.core.rmem_max). An origin's proxy flushes a whole object as one burst: a 4 MiB piece at a 9000-byte fragment MTU is 4.7 MB, and the tee carries every fragment the listener gets, so this must hold the burst or the cache misses exactly the frames a NACK will ask for")
+	flag.IntVar(&c.QueueDepth, "ingress-queue-depth", envInt("INGRESS_QUEUE_DEPTH", 1024),
+		"datagrams queued between an ingress socket's receive loop and its processors. The receive loop drains the socket in batches and never decodes or stores, so the kernel buffer empties while frames are processed. When the queue stays full past 100 ms the datagram is dropped and counted (bre_frames_dropped_total{reason=\"queue_full\"})")
+	flag.IntVar(&c.IngressProcs, "ingress-procs", envInt("INGRESS_PROCS", 4),
+		"processing goroutines per ingress socket, multicast and tee. Each datagram goes to the one chosen by its cache key (HashKey, SeqNum), so every write of one key keeps its order")
 	egressFlag := flag.String("egress-iface", envStr("EGRESS_IFACE", "eth0"),
 		"comma-separated NIC names for multicast egress")
 	flag.IntVar(&c.EgressPort, "egress-port", envInt("EGRESS_PORT", 9001),
@@ -553,6 +559,13 @@ func Load() (*Config, error) {
 	// one.
 	if c.NumWorkers < 1 || runtime.GOOS != "linux" {
 		c.NumWorkers = 1
+	}
+
+	if c.QueueDepth <= 0 {
+		return nil, fmt.Errorf("ingress-queue-depth must be > 0, got %d", c.QueueDepth)
+	}
+	if c.IngressProcs <= 0 {
+		return nil, fmt.Errorf("ingress-procs must be > 0, got %d", c.IngressProcs)
 	}
 
 	// Default NACK workers to NumCPU if set to zero.

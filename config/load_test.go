@@ -273,3 +273,25 @@ func TestLoad_MultiEgressIface(t *testing.T) {
 		t.Errorf("expected 2 egress ifaces, got %v", c.EgressIfaces)
 	}
 }
+
+func TestLoad_IngressPipeline(t *testing.T) {
+	c, err := loadWithArgs(t, withEgress(t)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.QueueDepth != 1024 || c.IngressProcs != 4 {
+		t.Errorf("defaults: queue depth %d, procs %d; want 1024, 4", c.QueueDepth, c.IngressProcs)
+	}
+	c, err = loadWithArgs(t, withEgress(t, "-ingress-queue-depth=8192", "-ingress-procs=6")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.QueueDepth != 8192 || c.IngressProcs != 6 {
+		t.Errorf("flags: queue depth %d, procs %d; want 8192, 6", c.QueueDepth, c.IngressProcs)
+	}
+	for _, bad := range []string{"-ingress-queue-depth=0", "-ingress-procs=0"} {
+		if _, err := loadWithArgs(t, withEgress(t, bad)...); err == nil {
+			t.Errorf("%s should error", bad)
+		}
+	}
+}
