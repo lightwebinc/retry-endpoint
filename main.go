@@ -290,14 +290,15 @@ func run() error {
 	// frame store and the cross-instance dedup gate share one backend via
 	// independent key prefixes ("bre:frame:" and "bre:dedup:").
 	frameBackend, err := scache.Open(context.Background(), scache.Config{
-		Backend:       cfg.CacheBackend,
-		MemoryMaxKeys: cfg.CacheMaxKeys,
-		RedisAddr:     cfg.RedisAddr,
-		AeroHosts:     cfg.AeroHosts,
-		AeroNamespace: cfg.AeroNamespace,
-		AeroSet:       cfg.AeroSet,
-		DialTimeout:   cfg.CacheDialTimeout,
-		OpTimeout:     cfg.CacheOpTimeout,
+		Backend:        cfg.CacheBackend,
+		MemoryMaxKeys:  cfg.CacheMaxKeys,
+		MemoryMaxBytes: cfg.CacheMaxBytes,
+		RedisAddr:      cfg.RedisAddr,
+		AeroHosts:      cfg.AeroHosts,
+		AeroNamespace:  cfg.AeroNamespace,
+		AeroSet:        cfg.AeroSet,
+		DialTimeout:    cfg.CacheDialTimeout,
+		OpTimeout:      cfg.CacheOpTimeout,
 	})
 	if err != nil {
 		return fmt.Errorf("cache backend: %w", err)

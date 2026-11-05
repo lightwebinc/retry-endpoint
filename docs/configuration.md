@@ -284,6 +284,18 @@ frame a pending repair may still need is never evicted while an older one
 remains. Expired entries are removed within about 250 ms of their deadline, so
 the in-memory store holds about rate × (TTL + 0.25 s) frames.
 
+### `-cache-max-bytes` / `CACHE_MAX_BYTES` (default: `0`)
+
+Maximum bytes of cached fragments in the in-memory cache (0 = no limit). Ignored
+by the `redis` and `aerospike` backends. Enforced per shard like the key cap,
+with the same eviction order; with both set, the tighter one holds.
+
+The memory a cache of fragments needs is the plane's rate times the window it
+keeps, whatever the fragment size, so this is the bound to size it by. Keep it
+well under `GOMEMLIMIT`: a heap held at the limit leaves the collector no room,
+and it then runs without pause. A perf edge carrying 1 GB/s for a 4 GiB object
+needs about 4.5 GB here and a `GOMEMLIMIT` near twice that.
+
 ---
 
 ## NACK Server
