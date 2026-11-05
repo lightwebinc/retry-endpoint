@@ -111,6 +111,7 @@ type Config struct {
 	CacheOpTimeout   time.Duration
 	CacheTTL         time.Duration
 	CacheMaxKeys     int // Maximum number of keys in cache (0 = no limit)
+	CacheMaxBytes    int // Maximum bytes of cached fragments, memory backend (0 = no limit)
 
 	// Per-FrameVer TTLs. Resolution order applied in Load():
 	//   1. explicit semantic flag/env (e.g. CACHE_TTL_TX) — wins
@@ -258,6 +259,8 @@ func Load() (*Config, error) {
 		"BRC-148 BEEF plane shard-bit width (0-12, 0 = single group); must match proxy")
 	flag.IntVar(&c.CacheMaxKeys, "cache-max-keys", envInt("CACHE_MAX_KEYS", 0),
 		"maximum number of keys in cache (0 = no limit)")
+	flag.IntVar(&c.CacheMaxBytes, "cache-max-bytes", envInt("CACHE_MAX_BYTES", 0),
+		"maximum bytes of cached fragments in the memory backend (0 = no limit); size it as the repair window times the plane's rate, under GOMEMLIMIT with room for the collector")
 
 	flag.IntVar(&c.NACKPort, "nack-port", envInt("NACK_PORT", 9300),
 		"NACK listen port")
