@@ -511,7 +511,7 @@ On `SIGINT` or `SIGTERM`:
    and the process sleeps for that duration while the ingress and NACK workers
    continue serving.
 2. The root `context.Context` is canceled, unblocking `ingress.Run` and
-   `server.Run`. The `done` channel is closed, signalling the metrics server.
+   `server.Run`. The `done` channel is closed, signaling the metrics server.
 3. `main` waits for all goroutines via `sync.WaitGroup`, then flushes the OTLP
    exporter before returning.
 

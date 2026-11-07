@@ -242,7 +242,7 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		return nil, err
 	}
 	if r.teeDatagrams, err = meter.Int64Counter("bre_tee_datagrams_total",
-		metric.WithDescription("Datagrams accepted on the loopback tee-ingest socket, by form: encap = teewire-enveloped (listener mirror, original source preserved), raw = bare frame (proxy mirror, labelled by the loopback datagram source)")); err != nil {
+		metric.WithDescription("Datagrams accepted on the loopback tee-ingest socket, by form: encap = teewire-enveloped (listener mirror, original source preserved), raw = bare frame (proxy mirror, labeled by the loopback datagram source)")); err != nil {
 		return nil, err
 	}
 	if r.beaconAdvertsSent, err = meter.Int64Counter("bre_beacon_adverts_sent_total",

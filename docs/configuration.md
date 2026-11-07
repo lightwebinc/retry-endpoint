@@ -865,7 +865,7 @@ retry-endpoint \
 
 ## Helm chart
 
-Every flag documented in this file is exposed under `.config` in the corresponding Helm chart's `values.yaml`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
+Most flags documented in this file are exposed under `.config` in the Helm chart's `values.yaml`; the rest (`-tee-listen`, `-mc-join-enabled`, `-control-group-compat`, `-cache-max-bytes`, the `-ingress-*` tuning flags, `-rl-sender-*`) are set through `extraEnv`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
 
 Chart: [`charts/retry-endpoint`](https://github.com/lightwebinc/charts/tree/main/charts/retry-endpoint): `config.nackAddr` is effectively required; no Redis subchart bundled.
 
