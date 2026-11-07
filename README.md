@@ -46,7 +46,7 @@ shard-proxy ──multicast──▶ FF05::B:<shard>:9001
 
 ## Requirements
 
-- Go 1.26.2 or later (the `go.mod` floor)
+- Go 1.26 or later
 - Linux (any modern kernel; `SO_REUSEADDR` cross-EUID co-bind) or FreeBSD
   (`SO_REUSEPORT` co-bind, which requires the co-resident listener to run as
   the **same** uid; FreeBSD has no cross-EUID share)
@@ -72,15 +72,6 @@ make help    # list targets
   -egress-iface eth0 \
   -shard-bits 2
 
-# Redis cache (multi-node with cross-instance dedup)
-./retry-endpoint \
-  -mc-iface enp6s0 \
-  -egress-iface enp6s0 \
-  -shard-bits 2 \
-  -cache-backend redis \
-  -redis-addr redis.local:6379 \
-  -nack-addr 2001:db8::24
-
 # SSM (RFC 4607). Requires PIM-SSM in the fabric and a
 # raised net.ipv6.mld_max_msf. See the SSM section of bsv-multicast DESIGN.md.
 ./retry-endpoint \
@@ -91,10 +82,11 @@ make help    # list targets
   -source-mode ssm \
   -bind-source 2001:db8::24 \
   -ssm-bootstrap-manifest shard-manifest-headless.svc.cluster.local \
-  -ssm-publishers-static  2001:db8::a01,2001:db8::a02   # lab only
+  -ssm-publishers-static  2001:db8::a01,2001:db8::a02   # static seed; production derives sources from manifests
 ```
 
-See [docs/configuration.md](docs/configuration.md) for all flags and environment variable equivalents.
+Redis-cache, multi-homed and tier-1 fallback invocations are in
+[docs/configuration.md](docs/configuration.md#example-in-memory-cache-single-nic), with every flag and its environment variable.
 
 ## NACK_ADDR (required in production)
 
