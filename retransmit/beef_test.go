@@ -47,7 +47,7 @@ func TestTargetGroup_BEEF(t *testing.T) {
 
 	// Regression: the ContentID-derived tx-plane group must NOT be used.
 	if wrong := eng.GroupIndex(&contentID); gotIdx == wrong {
-		t.Fatalf("group derived from ContentID (0x%04X) — wrong field", wrong)
+		t.Fatalf("group derived from ContentID (0x%04X): wrong field", wrong)
 	}
 }
 

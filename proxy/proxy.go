@@ -9,7 +9,7 @@
 // Recovery is asynchronous ("cache-warm"): the server returns MISS immediately
 // and enqueues a job here; no NACK worker is held. Because the downstream
 // proxy is not joined to the upstream shard groups, the recovered frame must
-// return by unicast — the upstream endpoint must run with unicast retransmit
+// return by unicast, the upstream endpoint must run with unicast retransmit
 // enabled (proxied NACKs are always served a unicast copy; see the server).
 //
 // Proxied NACKs carry FlagProxied so an upstream endpoint never re-proxies
@@ -103,7 +103,7 @@ type Config struct {
 	// it did not ask for, out of order, under this node's source address, and
 	// an arrival-order gap tracker reads each one as evidence of loss. Unicast
 	// delivers the frame to the listener that actually asked, which is also the
-	// only way a requester on ANOTHER node ever receives a proxied recovery —
+	// only way a requester on ANOTHER node ever receives a proxied recovery:
 	// the multicast egress is link-scoped and never leaves this node.
 	Multicast bool
 	Unicast   bool
@@ -207,9 +207,9 @@ func (c *Client) recover(ctx context.Context, j job) {
 		// DELIVERED, and that changed when recovery started honouring the retransmit
 		// modes:
 		//
-		//   MULTICAST — one winner's retransmit reaches every requester, so a
+		//   MULTICAST, one winner's retransmit reaches every requester, so a
 		//               gap-only key is correct and maximally dedups.
-		//   UNICAST   — the winner sends ONLY to its own requester. A gap-only key
+		//   UNICAST  , the winner sends ONLY to its own requester. A gap-only key
 		//               would make every OTHER requester lose the race and receive
 		//               NOTHING, having to wait out its own NACK timeout. The claim
 		//               must therefore be per-requester.

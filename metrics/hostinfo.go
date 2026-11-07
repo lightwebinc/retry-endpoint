@@ -50,19 +50,19 @@ func (r *Recorder) SetHostInfo(inv hostinfo.Inventory) {
 }
 
 // SetOwnSource publishes bre_own_source_info (value 1) carrying this node's
-// own fabric source address. A node never joins its own source — see
-// excludeOwnSource — so it structurally cannot cache its own frames, and the
+// own fabric source address. A node never joins its own source: see
+// excludeOwnSource, so it structurally cannot cache its own frames, and the
 // (site, source) pair naming itself must never be read as starvation.
 //
 // The pair cannot simply be assumed absent: [Recorder.PreCreateSources] skips
 // it, but [Recorder.FrameCached] creates the series on the data path with no
 // roster check, so a single leaked own-source frame births the pair
 // permanently at a frozen count. The ingress socket now disables
-// IPV6_MULTICAST_ALL (the leak path that produced exactly this on testnet —
+// IPV6_MULTICAST_ALL (the leak path that produced exactly this on testnet:
 // a co-located listener's joins side-feeding the wildcard socket), so this
 // gauge is defence-in-depth: it keeps the alert honest on binaries or kernels
 // where the sockopt is absent, and against any future leak path. The
-// RetryCacheSourceStarved rule subtracts the pair — and only the pair — with
+// RetryCacheSourceStarved rule subtracts the pair (and only the pair) with
 // `unless on(site, source)`. Best-effort; registration errors are ignored.
 func (r *Recorder) SetOwnSource(src string) {
 	// Canonicalise here rather than at the call site: the data path labels

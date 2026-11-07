@@ -29,7 +29,7 @@ func TestOpenRawSocket_MulticastAllDisabled(t *testing.T) {
 		t.Skipf("kernel does not support IPV6_MULTICAST_ALL: %v", err)
 	}
 	if got != 0 {
-		t.Errorf("IPV6_MULTICAST_ALL = %d, want 0 — the socket would receive groups "+
+		t.Errorf("IPV6_MULTICAST_ALL = %d, want 0, the socket would receive groups "+
 			"it never joined, making cache coverage unauditable", got)
 	}
 }
@@ -63,6 +63,6 @@ func TestCoBindOptsLeavesReusePortOffOnLinux(t *testing.T) {
 		t.Fatalf("coBindOpts: %v", err)
 	}
 	if got, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT); err != nil || got != 0 {
-		t.Errorf("SO_REUSEPORT = %d (err %v), want 0 — enabling it on Linux breaks the cross-EUID SO_REUSEADDR share", got, err)
+		t.Errorf("SO_REUSEPORT = %d (err %v), want 0: enabling it on Linux breaks the cross-EUID SO_REUSEADDR share", got, err)
 	}
 }

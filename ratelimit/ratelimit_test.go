@@ -320,7 +320,7 @@ func TestSequenceTierIsScopedPerFlow(t *testing.T) {
 
 	// An unrelated flow at the same SeqNum must be unaffected.
 	if ok, level := l.Allow(ip, 0xBBBB, seq); !ok {
-		t.Fatalf("flow B starved by flow A's budget at the same SeqNum (level=%q) — repair-denial across the fabric", level)
+		t.Fatalf("flow B starved by flow A's budget at the same SeqNum (level=%q): repair-denial across the fabric", level)
 	}
 }
 

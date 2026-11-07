@@ -27,7 +27,7 @@ import (
 // multicast retransmit to the requester on the strength of it. A bare or
 // multicast-flagged ACK cancels the listener's gap on trust (BRC-126 § NACK
 // Dispatch Flow), and the sibling's copy may have left the wire up to a full
-// dedup window ago — so claiming it would close a gap that nothing repaired.
+// dedup window ago, so claiming it would close a gap that nothing repaired.
 var ErrDedupSuppressed = errors.New("retransmit suppressed by cross-instance dedup")
 
 // Retransmitter handles retransmitting cached frames.
@@ -130,7 +130,7 @@ func (r *Retransmitter) Close() error {
 
 // RetransmitUnicast sends a cached frame verbatim back to a single requester
 // (dst), the source address of an incoming NACK. Unlike the multicast path it
-// does NOT apply cross-instance dedup — each requester needs its own copy, and
+// does NOT apply cross-instance dedup, each requester needs its own copy, and
 // the cross-domain NACK proxy depends on this as its only return channel. dst
 // must be non-nil.
 func (r *Retransmitter) RetransmitUnicast(raw []byte, dst *net.UDPAddr) error {
@@ -159,7 +159,7 @@ func (r *Retransmitter) SetBEEF(pe *shard.PlaneEngine) { r.beefEngine = pe }
 //   - V5:    GroupSubtreeDataAnnounce (0xFFFB)
 //   - V8:    the group index carried in the bundle header (offset 56)
 //   - V9:    BRC-148 domain-tagged group from the TopicID at offset 56 at
-//     the BEEF plane's width — never from offset 8 (the ContentID)
+//     the BEEF plane's width, never from offset 8 (the ContentID)
 //   - else:  shard group derived from the TxID
 func (r *Retransmitter) targetGroup(raw []byte, txID [32]byte) (*net.UDPAddr, error) {
 	if len(raw) >= 7 {
@@ -306,7 +306,7 @@ func (r *Retransmitter) openEgressSocket(iface *net.Interface) (*net.UDPConn, er
 
 // buildDedupKey builds the cross-instance deduplication key for a frame.
 //
-// Key: HashKey ∥ SeqNum (bytes 40–55) — the per-flow identifier followed by
+// Key: HashKey ∥ SeqNum (bytes 40–55), the per-flow identifier followed by
 // that flow's monotonic counter. Both fields sit at these offsets in every
 // cached frame version (BRC-124/128 92B, BRC-130's 104B fragment, BRC-132,
 // BRC-142's 66B bundle header and BRC-149 0x09), so one slice covers the

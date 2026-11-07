@@ -10,9 +10,9 @@ import (
 // Control-plane group compatibility (BRC-126 §Beacon Scopes, BRC-129
 // §Source Mode and Address Range).
 //
-// Both BRCs require the control-plane groups at index 0xFFFD — the BRC-126
+// Both BRCs require the control-plane groups at index 0xFFFD, the BRC-126
 // ADVERT beacon and the BRC-139 shard manifest, which share that group
-// address — to take the source-specific FF3x prefix when the fabric runs
+// address: to take the source-specific FF3x prefix when the fabric runs
 // SSM: FF35::B:FFFD at site scope, FF3E::B:FFFD at global scope. Releases
 // before this one always advertised into the any-source FF0x prefix,
 // whatever -source-mode said, even though the data plane in the same
@@ -21,17 +21,17 @@ import (
 // Correcting that moves a live group address, so it is a flag day: a
 // listener joined to FF35::B:FFFD hears nothing from a retry endpoint still
 // advertising into FF05::B:FFFD, and a beacon that lands on the wrong group
-// raises no error anywhere — the symptom is silence. This switch exists
+// raises no error anywhere, the symptom is silence. This switch exists
 // only to make that transition ordered and observable. It is temporary:
 // once the fleet is on "derived" the flag and this file go away.
 //
-// ROLLOUT ORDER — the same note is in shard-listener and shard-manifest:
+// ROLLOUT ORDER, the same note is in shard-listener and shard-manifest:
 //
 //  1. Roll RECEIVERS (shard-listener, shard-proxy). Their default is
 //     "both", so an upgraded receiver joins FF0x AND FF3x and hears
 //     un-upgraded and upgraded senders alike. No config change is needed
 //     and there is no window in which discovery stops.
-//  2. Roll SENDERS (retry-endpoint, shard-manifest) — this binary. The
+//  2. Roll SENDERS (retry-endpoint, shard-manifest), this binary. The
 //     default here is "asm-only", so upgrading does not move the wire.
 //  3. One converge sets the SENDERS to "derived". ADVERTs move to FF3x,
 //     which every receiver from step 1 already joined.
@@ -70,12 +70,12 @@ var ControlGroupCompatValues = []string{ControlGroupASMOnly, ControlGroupBoth, C
 // derived prefix second, deduplicated when they coincide.
 //
 // The SSM prefix comes from [shard.Prefix], the same helper the data plane
-// uses to build Config.MCPrefix — the scope table below is only consulted
+// uses to build Config.MCPrefix, the scope table below is only consulted
 // for the any-source form, which it already held.
 //
 // BRC-129 defines SSM control groups at site and global scope only (FF35
-// and FF3E); "link" and "org" have no SSM control group. Under "derived" —
-// an explicit request for the conformant address — asking for one at such a
+// and FF3E); "link" and "org" have no SSM control group. Under "derived":
+// an explicit request for the conformant address: asking for one at such a
 // scope is a config error rather than a silent fall back to FF0x. Under
 // "both" it degrades to the any-source prefix alone, so the receiver-safe
 // default can never turn a binary upgrade into a startup failure. Under ASM

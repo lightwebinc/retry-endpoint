@@ -21,8 +21,8 @@ jobs:
     uses: lightwebinc/ci/.github/workflows/go-dagger.yml@4bd810e61f5ffae2db7054a58d6e519368b40f00 # v0.6.0
 
   # freebsd/amd64 is a real deployment target (the FreeBSD spines/edges) and this
-  # repo carries a GOOS split — ingress/mcastall_linux.go vs
-  # ingress/mcastall_other.go — that NOTHING else in CI compiles. The Dagger
+  # repo carries a GOOS split: ingress/mcastall_linux.go vs
+  # ingress/mcastall_other.go, that NOTHING else in CI compiles. The Dagger
   # pipeline builds linux only, so the non-linux half rots unnoticed.
   #
   # A linux runner can only cross-BUILD and cross-VET the freebsd target; it
@@ -62,7 +62,7 @@ jobs:
 
       # `go build ./...` does not compile _test.go, so a test that references a
       # linux-only symbol without a build tag still slips through. go vet
-      # type-checks the test files too — which is precisely the defect class this
+      # type-checks the test files too, which is precisely the defect class this
       # job exists to catch.
       - name: Vet (freebsd/amd64)
         working-directory: retry-endpoint

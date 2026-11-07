@@ -52,8 +52,8 @@ type Config struct {
 	// decision in one place (config/controlgroup.go) instead of a scope
 	// table in this package.
 	//
-	// Empty falls back to the pre-fix derivation — the any-source
-	// prefixes implied by Scope — so a caller that has not been updated
+	// Empty falls back to the pre-fix derivation, the any-source
+	// prefixes implied by Scope, so a caller that has not been updated
 	// keeps its old wire rather than silently changing group.
 	GroupPrefixes []uint16
 }
@@ -198,8 +198,8 @@ func (s *Sender) buildADVERT() []byte {
 //
 // The prefixes are NOT derived here. BRC-126 §Beacon Scopes and BRC-129
 // §Source Mode and Address Range make the control-plane group address a
-// function of the source mode as well as the scope — FF35::B:FFFD at site
-// scope under SSM, not FF05::B:FFFD — and this package has no view of
+// function of the source mode as well as the scope: FF35::B:FFFD at site
+// scope under SSM, not FF05::B:FFFD, and this package has no view of
 // -source-mode. config.Config.BeaconGroupPrefixes resolves it (reusing
 // shard.Prefix, the same helper the data plane uses) and hands the answer
 // down in Config.GroupPrefixes.

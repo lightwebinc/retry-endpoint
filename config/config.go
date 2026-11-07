@@ -63,15 +63,15 @@ type Config struct {
 	ListenPort int    // Multicast listen port
 	ShardBits  uint   // Number of txid prefix bits used as the group key (1–12)
 	NumGroups  uint32 // Derived: 1 << ShardBits
-	MCScope    string // "site" | "global" — also accepts legacy "link"/"org" in ASM mode
-	MCPrefix   uint16 // Derived from (SourceMode, MCScope) — upper 16 bits of the IPv6 group address
+	MCScope    string // "site" | "global", also accepts legacy "link"/"org" in ASM mode
+	MCPrefix   uint16 // Derived from (SourceMode, MCScope): upper 16 bits of the IPv6 group address
 	MCGroupID  uint16 // IANA group-id occupying bytes 12–13 (default 0x000B)
 
 	// Tee ingest (loopback frame mirror). TeeListen binds a dedicated
 	// loopback UDP socket fed by co-resident processes: the proxy's
 	// -retry-tee (own-origin frames, raw) and the listener's -retry-tee
 	// (fabric-received frames, teewire-enveloped with the original source).
-	// The address MUST be loopback — the envelope asserts a source address,
+	// The address MUST be loopback, the envelope asserts a source address,
 	// so accepting it off the network would let a remote sender forge
 	// per-source attribution. MCJoinEnabled=false runs tee-only: no
 	// multicast join and no wildcard data-port bind at all (the co-bind
@@ -90,7 +90,7 @@ type Config struct {
 	//   bootstrap source lists (IPv6 literals or DNS names; resolved via
 	//   the shared bootstrap.Resolver at startup and refreshed periodically).
 	//   Used to (S,G)-join the matching control group.
-	// PublishersStatic: lab/CI escape hatch — pre-declared data-plane
+	// PublishersStatic: lab/CI escape hatch, pre-declared data-plane
 	//   publisher source list. Production must learn the data-plane source
 	//   set from manifest discovery.
 	SourceMode             string
@@ -114,8 +114,8 @@ type Config struct {
 	CacheMaxBytes    int // Maximum bytes of cached fragments, memory backend (0 = no limit)
 
 	// Per-FrameVer TTLs. Resolution order applied in Load():
-	//   1. explicit semantic flag/env (e.g. CACHE_TTL_TX) — wins
-	//   2. else, explicit CACHE_TTL — overrides differentiated default
+	//   1. explicit semantic flag/env (e.g. CACHE_TTL_TX): wins
+	//   2. else, explicit CACHE_TTL: overrides differentiated default
 	//   3. else, differentiated default below
 	CacheTTLTx      time.Duration // FrameVer V2 (BRC-124/128 regular tx)
 	CacheTTLBlock   time.Duration // FrameVer V4 (BRC-131 block control)
@@ -138,7 +138,7 @@ type Config struct {
 	EgressIfaces        []string      // NIC names for multicast egress
 	EgressPort          int           // Destination UDP port for retransmitted frames
 	DedupWindow         time.Duration // Deduplication window (default 60s)
-	EgressMulticastLoop bool          // IPV6_MULTICAST_LOOP on the retransmit socket; REQUIRED on a collapsed/mesh router node where egress rides a dummy mc-local iface — the kernel only submits locally-originated multicast to the MFC (for forwarding onto tunnels) when loop is on. Mirrors shard-proxy EGRESS_MULTICAST_LOOP. Default off.
+	EgressMulticastLoop bool          // IPV6_MULTICAST_LOOP on the retransmit socket; REQUIRED on a collapsed/mesh router node where egress rides a dummy mc-local iface, the kernel only submits locally-originated multicast to the MFC (for forwarding onto tunnels) when loop is on. Mirrors shard-proxy EGRESS_MULTICAST_LOOP. Default off.
 
 	// NACK proxying (cross-domain recovery). When enabled, a cache miss
 	// triggers an asynchronous recovery from an upstream retry-endpoint.

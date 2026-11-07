@@ -197,7 +197,7 @@ func TestSetOwnSource_MatchesDataPathSpelling(t *testing.T) {
 	dataPath := netip.AddrFrom16(netip.MustParseAddr(wire).As16()).String()
 
 	if info != dataPath {
-		t.Fatalf("label mismatch: info=%q data-path=%q — the alert join would break", info, dataPath)
+		t.Fatalf("label mismatch: info=%q data-path=%q, the alert join would break", info, dataPath)
 	}
 }
 

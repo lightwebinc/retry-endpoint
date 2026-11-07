@@ -161,7 +161,7 @@ func (s *Server) Run(ctx context.Context) error {
 		host = s.bindAddr
 	}
 	// SO_REUSEADDR so the NACK port can be shared with a co-resident shard-listener's beacon
-	// on the same port (collapsed node, different EUID) — same rationale as the ingress socket.
+	// on the same port (collapsed node, different EUID): same rationale as the ingress socket.
 	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
 		var cerr error
 		if err := c.Control(func(fd uintptr) {
@@ -306,7 +306,7 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		// Honest-congestion signal for the sequence tier: a retransmit for this
 		// exact gap was just served and is propagating via multicast, so tell the
 		// listener to hold rather than time out and escalate. The IP tier is the
-		// flood/abuse tier — stay silent there (never answer a possible spoof).
+		// flood/abuse tier: stay silent there (never answer a possible spoof).
 		if level == ratelimit.LevelSequence && s.throttleResp && src != nil {
 			s.sendThrottled(conn, src, throttleBucketSequence, startSeq)
 		}
@@ -371,7 +371,7 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 
 	// Rate limiting: tier 4 (group), post-lookup. Like the other honest-
 	// congestion tiers: THROTTLED (group bucket) when enabled, silence
-	// otherwise — never ACK, which would cancel the listener gap with no
+	// otherwise, never ACK, which would cancel the listener gap with no
 	// retransmit dispatched (silent loss).
 	if s.shardEngine != nil {
 		groupIdx := s.shardEngine.GroupIndex(&txID)
@@ -417,7 +417,7 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 			// for a copy that may have left the wire a full dedup window
 			// ago. The retransmitter counts the drop; we fall through, and
 			// if no unicast copy is sent either the requester simply gets no
-			// ACK and escalates — the honest outcome for a repair this
+			// ACK and escalates, the honest outcome for a repair this
 			// endpoint did not perform.
 		default:
 			s.log.Error("retransmit error", "err", err)
@@ -425,7 +425,7 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		}
 	}
 	// Unicast the frame back to the requester when unicast mode is on, or
-	// always for a proxied NACK — a cross-domain proxy receives the frame
+	// always for a proxied NACK, a cross-domain proxy receives the frame
 	// only via this return channel (it is not joined to our shard groups).
 	if (s.retransmitUC || proxied) && src != nil {
 		if err := s.retransmit.RetransmitUnicast(raw, src); err != nil {
@@ -440,8 +440,8 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 
 	// ACK means "retransmit dispatched" (BRC-126), and a bare or
 	// multicast-flagged ACK cancels the requester's gap on trust. So when a
-	// send was ATTEMPTED and produced nothing — dedup-suppressed multicast, or
-	// a failed unicast write — stay quiet and let the requester escalate to
+	// send was ATTEMPTED and produced nothing: dedup-suppressed multicast, or
+	// a failed unicast write: stay quiet and let the requester escalate to
 	// the next endpoint rather than close a gap nothing repaired.
 	//
 	// An endpoint configured with neither send mode is the separate, deliberate

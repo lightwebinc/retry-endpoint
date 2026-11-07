@@ -396,7 +396,7 @@ func TestRecover_UnicastDedupIsPerRequester(t *testing.T) {
 	c.recover(context.Background(), job{hashKey: 7, seq: 7, requester: b})
 
 	if got := frt.unicastCount(); got != 2 {
-		t.Errorf("unicast count = %d, want 2 — the second requester lost the in-flight "+
+		t.Errorf("unicast count = %d, want 2, the second requester lost the in-flight "+
 			"claim and was never served", got)
 	}
 
