@@ -76,12 +76,36 @@ address: the envelope asserts a source address, and accepting it off the
 network would let a remote sender forge per-source attribution.
 Accepted datagrams are counted in `bre_tee_datagrams_total{form="encap"|"raw"}`.
 
+### `-tee-ring` / `TEE_RING` (default: empty = disabled)
+
+Path of a **shared-memory tee ring** (`shard-common/teering`, a file on
+`/dev/shm`) written by the co-resident proxy's `-retry-tee-ring`. The
+proxy's lanes mirror their egress into the ring instead of the loopback
+socket, and the endpoint copies each datagram out of it and processes it as a raw tee datagram (counted in
+`bre_tee_datagrams_total{form="raw"}`, labeled `::1` like the socket tee's
+raw form). The ring removes the loopback UDP stack from the tee: on the
+lab's edge (2026-11-10) it saved each of the proxy and the endpoint about
+15% of its CPU. With the in-memory cache a datagram is copied once, out of
+the ring into memory the cache then keeps (no second copy by the cache):
+that cut the endpoint's CPU by a further 40% in the same lab. Other cache
+backends take the datagram through a receive slot and copy it themselves.
+
+A file that is not there yet is waited for; a producer that resets the file
+in place is followed; a file replaced by a new one (a proxy restart under
+systemd `DynamicUser`, whose default `RemoveIPC=yes` deletes the unit's
+`/dev/shm` files at every stop: set `RemoveIPC=no` on both units) is noticed
+within a second and re-attached, counted once in
+`bre_frames_dropped_total{reason="ring_replaced"}`; datagrams the consumer
+could not take are `reason="ring_lost"`. May be set beside `-tee-listen`
+(the listener's enveloped tee still needs the socket). Satisfies
+`-mc-join-enabled=false` like `-tee-listen` does.
+
 ### `-mc-join-enabled` / `MC_JOIN_ENABLED` (default: `true`)
 
 When `false`, the endpoint performs **no multicast join and does not bind the
 wildcard data port at all**: tee-only ingest, the collapsed-node end-state
 that frees the shared `:9001` co-bind (on FreeBSD this is what ultimately
-removes the same-uid co-bind contract). Fails closed unless `-tee-listen` is
+removes the same-uid co-bind contract). Fails closed unless `-tee-listen` or `-tee-ring` is
 set: with neither feed the cache never fills and every NACK is answered MISS
 while the process looks healthy.
 
@@ -714,6 +738,13 @@ HTTP bind address for:
 - `GET /healthz`: always `200 OK` while the process is running
 - `GET /readyz`: `200` when ready; `503` while starting or draining
 - `POST /loglevel?level=<lvl>`: runtime log level (see `-log-level`)
+
+### `-pprof-listen` / `PPROF_LISTEN` (default: empty = off)
+
+Loopback `host:port` (e.g. `127.0.0.1:6071`) serving `net/http/pprof`
+(`/debug/pprof/profile`, `goroutine`, `heap`, `block`, `mutex`, `trace`) for
+profiling a running endpoint. Loopback only: the handlers expose the
+process's internals.
 
 ### `-instance` / `INSTANCE_ID` (default: hostname)
 

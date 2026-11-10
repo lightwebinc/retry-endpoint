@@ -14,6 +14,8 @@ on demand to `shard-listener` nodes that detect sequence gaps.
 
 The cache can also (or instead) be fed over loopback by co-resident processes:
 `-tee-listen` accepts the proxy's `-retry-tee` mirror (own-origin frames, raw)
+`-tee-ring` takes the proxy's `-retry-tee-ring` mirror through shared memory instead
+(no loopback stack; docs/configuration.md).
 and the listener's `-retry-tee` mirror (fabric-received frames, source-preserving
 `teewire` envelope). With `-mc-join-enabled=false` the endpoint runs tee-only:
 no multicast join and no shared data-port bind at all. See
