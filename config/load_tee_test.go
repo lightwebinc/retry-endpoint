@@ -64,3 +64,16 @@ func TestLoad_JoinDisabledRequiresTee(t *testing.T) {
 		t.Error("MCJoinEnabled = true, want false")
 	}
 }
+
+func TestLoad_PprofListenLoopbackOnly(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:6071", "[::1]:6071"} {
+		if _, err := loadWithArgs(t, withEgress(t, "-pprof-listen="+addr)...); err != nil {
+			t.Errorf("pprof-listen=%s: %v", addr, err)
+		}
+	}
+	for _, addr := range []string{":6071", "0.0.0.0:6071", "192.0.2.1:6071", "localhost:6071", "[2001:db8::1]:6071"} {
+		if _, err := loadWithArgs(t, withEgress(t, "-pprof-listen="+addr)...); err == nil {
+			t.Errorf("pprof-listen=%s should error", addr)
+		}
+	}
+}

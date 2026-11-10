@@ -83,12 +83,14 @@ Path of a **shared-memory tee ring** (`shard-common/teering`, a file on
 proxy's lanes mirror their egress into the ring instead of the loopback
 socket, and the endpoint copies each datagram out of it and processes it as a raw tee datagram (counted in
 `bre_tee_datagrams_total{form="raw"}`, labeled `::1` like the socket tee's
-raw form). The ring removes the loopback UDP stack from the tee: on the
-lab's edge (2026-11-10) it saved each of the proxy and the endpoint about
-15% of its CPU. With the in-memory cache a datagram is copied once, out of
-the ring into memory the cache then keeps (no second copy by the cache):
-that cut the endpoint's CPU by a further 40% in the same lab. Other cache
-backends take the datagram through a receive slot and copy it themselves.
+raw form). The ring removes the loopback UDP stack from the tee, which
+lowers the CPU cost of the mirror in both the proxy and the endpoint. With
+the in-memory cache a datagram is copied once, out of the ring into memory
+the cache then keeps (no second copy by the cache). Other cache backends
+take the datagram through a receive slot and copy it themselves. The ring
+carries raw frames only: a ring datagram in the `teewire` envelope form is
+dropped and counted as `bre_frames_dropped_total{reason="ring_encap"}`, so
+a ring writer cannot assert a frame source.
 
 A file that is not there yet is waited for; a producer that resets the file
 in place is followed; a file replaced by a new one (a proxy restart under
@@ -744,7 +746,8 @@ HTTP bind address for:
 Loopback `host:port` (e.g. `127.0.0.1:6071`) serving `net/http/pprof`
 (`/debug/pprof/profile`, `goroutine`, `heap`, `block`, `mutex`, `trace`) for
 profiling a running endpoint. Loopback only: the handlers expose the
-process's internals.
+process's internals, and a value that is not a loopback literal fails
+startup.
 
 ### `-instance` / `INSTANCE_ID` (default: hostname)
 

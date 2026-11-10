@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/lightwebinc/shard-common/cache/memory"
 	"github.com/lightwebinc/shard-common/teering"
+	"github.com/lightwebinc/shard-common/teewire"
 
 	"github.com/lightwebinc/retry-endpoint/cache"
 )
@@ -141,5 +143,44 @@ func TestRunTeeRing_OwnedByMemoryCache(t *testing.T) {
 	}
 	if p.Dropped() != 0 {
 		t.Fatalf("producer dropped %d", p.Dropped())
+	}
+}
+
+// TestRunTeeRing_EnvelopeDropped: the ring carries raw frames only. A
+// datagram in the teewire envelope form would assert a frame source, so it
+// is dropped and the raw frames around it are stored.
+func TestRunTeeRing_EnvelopeDropped(t *testing.T) {
+	mc := &mockCache{}
+	w := newTestWorker(mc)
+	if w.log == nil {
+		w.log = slog.Default().With("component", "ingress-test")
+	}
+	path := filepath.Join(t.TempDir(), "tee-ring")
+	p, err := teering.Create(path, teering.MinCapacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = p.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	exited := make(chan error, 1)
+	go func() { exited <- w.RunTeeRing(ctx, path) }()
+	src := netip.MustParseAddrPort("[fd00::7]:9001")
+	for i := range 3 {
+		raw := buildRaw(t, 0x1111222233334444, uint64(i+1), []byte("ring-raw"))
+		if i == 1 {
+			raw = teewire.AppendEncap(nil, src, raw)
+		}
+		if err := p.Write(raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitStores(t, mc, 2)
+	time.Sleep(50 * time.Millisecond)
+	if got := mc.storeCount(); got != 2 {
+		t.Fatalf("stored %d, want 2 (the enveloped datagram dropped)", got)
+	}
+	cancel()
+	if err := <-exited; err != nil {
+		t.Fatalf("RunTeeRing: %v", err)
 	}
 }

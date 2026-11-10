@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lightwebinc/shard-common/teering"
+	"github.com/lightwebinc/shard-common/teewire"
 
 	"github.com/lightwebinc/retry-endpoint/cache"
 )
@@ -24,8 +25,9 @@ import (
 // one copy into a slot.
 //
 // Trust: the ring file is written by whoever can open it. It carries raw
-// frames only (no source envelope), so a writer can forge nothing a
-// loopback sender could not; keep it on a tmpfs the node's processes own.
+// frames only: a ring datagram in the teewire envelope form (which asserts
+// a frame source) is dropped and counted, so a ring writer cannot forge
+// per-source attribution. Keep the file on a tmpfs the node's processes own.
 
 const (
 	// ringWaitMax bounds the consumer's sleep between polls of an empty ring.
@@ -45,10 +47,17 @@ func (w *Worker) RunTeeRing(ctx context.Context, path string) error {
 	for ctx.Err() == nil {
 		c, err := teering.Attach(path)
 		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, teering.ErrBadHeader) {
+			// A producer creates the file and then widens its mode, so a
+			// consumer under another uid can be refused in between: retried,
+			// at warn level so a refusal that persists stays visible.
+			switch {
+			case errors.Is(err, os.ErrPermission):
+				w.log.Warn("tee ring not readable, retrying", "path", path, "err", err)
+			case errors.Is(err, os.ErrNotExist), errors.Is(err, teering.ErrBadHeader):
+				w.log.Info("tee ring not ready, waiting", "path", path, "err", err)
+			default:
 				return fmt.Errorf("ingress tee ring: %w", err)
 			}
-			w.log.Info("tee ring not ready, waiting", "path", path, "err", err)
 			select {
 			case <-ctx.Done():
 				return nil
@@ -168,6 +177,12 @@ func (w *Worker) receiveRing(ctx context.Context, c *teering.Consumer) {
 		}
 		idleSince = time.Time{}
 		c.Ready()
+		if teewire.IsEncap(s.buf[:n]) {
+			// Raw frames only: an envelope would assert a source.
+			w.dropped("ring_encap")
+			free <- s
+			continue
+		}
 		s.n, s.v6, s.from, s.trunc = n, true, loopback, false
 		q := queues[0]
 		if procs > 1 {

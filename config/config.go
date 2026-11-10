@@ -75,7 +75,7 @@ type Config struct {
 	// so accepting it off the network would let a remote sender forge
 	// per-source attribution. MCJoinEnabled=false runs tee-only: no
 	// multicast join and no wildcard data-port bind at all (the co-bind
-	// end-state); it fails closed unless TeeListen is set, because a retry
+	// end-state); it fails closed unless TeeListen or TeeRing is set, because a retry
 	// with neither feed answers every NACK with MISS while looking healthy.
 	TeeListen     netip.AddrPort // zero = disabled
 	TeeRing       string         // shared-memory tee ring file (the proxy's -retry-tee-ring); "" = disabled
@@ -229,7 +229,7 @@ func Load() (*Config, error) {
 	flag.StringVar(&c.TeeRing, "tee-ring", envStr("TEE_RING", ""),
 		"shared-memory tee ring file written by the co-resident proxy's -retry-tee-ring (a path on /dev/shm): its mirrored datagrams are read from the ring instead of a loopback socket; empty = disabled; may be set beside -tee-listen")
 	flag.BoolVar(&c.MCJoinEnabled, "mc-join-enabled", envBool("MC_JOIN_ENABLED", true),
-		"join multicast groups and bind the wildcard data port for cache ingest; false = tee-only ingest (requires -tee-listen; frees the shared data port on a collapsed node)")
+		"join multicast groups and bind the wildcard data port for cache ingest; false = tee-only ingest (requires -tee-listen or -tee-ring; frees the shared data port on a collapsed node)")
 
 	flag.StringVar(&c.CacheBackend, "cache-backend", envStr("CACHE_BACKEND", "memory"),
 		"cache backend: memory | redis | aerospike")
@@ -523,6 +523,16 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("-tee-listen %q must carry an explicit port", *teeListen)
 		}
 		c.TeeListen = ap
+	}
+	// pprof exposes the process's internals: loopback literals only.
+	if c.PprofListen != "" {
+		ap, err := netip.ParseAddrPort(c.PprofListen)
+		if err != nil {
+			return nil, fmt.Errorf("invalid -pprof-listen %q: %w", c.PprofListen, err)
+		}
+		if !ap.Addr().IsLoopback() {
+			return nil, fmt.Errorf("-pprof-listen %q must be a loopback literal such as 127.0.0.1:6071", c.PprofListen)
+		}
 	}
 	if !c.MCJoinEnabled && !c.TeeListen.IsValid() && c.TeeRing == "" {
 		return nil, fmt.Errorf("mc-join-enabled=false requires -tee-listen or -tee-ring: with neither multicast join nor tee ingest the cache never fills and every NACK is answered MISS")
