@@ -75,9 +75,10 @@ type Config struct {
 	// so accepting it off the network would let a remote sender forge
 	// per-source attribution. MCJoinEnabled=false runs tee-only: no
 	// multicast join and no wildcard data-port bind at all (the co-bind
-	// end-state); it fails closed unless TeeListen is set, because a retry
+	// end-state); it fails closed unless TeeListen or TeeRing is set, because a retry
 	// with neither feed answers every NACK with MISS while looking healthy.
 	TeeListen     netip.AddrPort // zero = disabled
+	TeeRing       string         // shared-memory tee ring file (the proxy's -retry-tee-ring); "" = disabled
 	MCJoinEnabled bool           // default true
 
 	// SSM (RFC 4607)
@@ -172,6 +173,7 @@ type Config struct {
 
 	// Observability
 	MetricsAddr   string        // HTTP bind address for /metrics, /healthz, /readyz
+	PprofListen   string        // loopback address for net/http/pprof; "" = off
 	InstanceID    string        // OTel service.instance.id
 	OTLPEndpoint  string        // gRPC OTLP endpoint (empty = disabled)
 	OTLPInterval  time.Duration // OTLP push interval
@@ -224,8 +226,10 @@ func Load() (*Config, error) {
 		"multicast listen port")
 	teeListen := flag.String("tee-listen", envStr("TEE_LISTEN", ""),
 		"loopback host:port (e.g. [::1]:9002) for the tee ingest socket fed by a co-resident proxy/listener -retry-tee; must be a loopback literal; empty = disabled")
+	flag.StringVar(&c.TeeRing, "tee-ring", envStr("TEE_RING", ""),
+		"shared-memory tee ring file written by the co-resident proxy's -retry-tee-ring (a path on /dev/shm): its mirrored datagrams are read from the ring instead of a loopback socket; empty = disabled; may be set beside -tee-listen")
 	flag.BoolVar(&c.MCJoinEnabled, "mc-join-enabled", envBool("MC_JOIN_ENABLED", true),
-		"join multicast groups and bind the wildcard data port for cache ingest; false = tee-only ingest (requires -tee-listen; frees the shared data port on a collapsed node)")
+		"join multicast groups and bind the wildcard data port for cache ingest; false = tee-only ingest (requires -tee-listen or -tee-ring; frees the shared data port on a collapsed node)")
 
 	flag.StringVar(&c.CacheBackend, "cache-backend", envStr("CACHE_BACKEND", "memory"),
 		"cache backend: memory | redis | aerospike")
@@ -354,6 +358,8 @@ func Load() (*Config, error) {
 
 	flag.StringVar(&c.MetricsAddr, "metrics-addr", envStr("METRICS_ADDR", ":9400"),
 		"HTTP bind address for /metrics, /healthz, /readyz")
+	flag.StringVar(&c.PprofListen, "pprof-listen", envStr("PPROF_LISTEN", ""),
+		"loopback address (e.g. 127.0.0.1:6071) serving net/http/pprof for profiling; empty = off")
 	flag.StringVar(&c.InstanceID, "instance", envStr("INSTANCE_ID", ""),
 		"OTel service.instance.id (default: hostname)")
 	flag.StringVar(&c.OTLPEndpoint, "otlp-endpoint", envStr("OTLP_ENDPOINT", ""),
@@ -518,8 +524,18 @@ func Load() (*Config, error) {
 		}
 		c.TeeListen = ap
 	}
-	if !c.MCJoinEnabled && !c.TeeListen.IsValid() {
-		return nil, fmt.Errorf("mc-join-enabled=false requires -tee-listen: with neither multicast join nor tee ingest the cache never fills and every NACK is answered MISS")
+	// pprof exposes the process's internals: loopback literals only.
+	if c.PprofListen != "" {
+		ap, err := netip.ParseAddrPort(c.PprofListen)
+		if err != nil {
+			return nil, fmt.Errorf("invalid -pprof-listen %q: %w", c.PprofListen, err)
+		}
+		if !ap.Addr().IsLoopback() {
+			return nil, fmt.Errorf("-pprof-listen %q must be a loopback literal such as 127.0.0.1:6071", c.PprofListen)
+		}
+	}
+	if !c.MCJoinEnabled && !c.TeeListen.IsValid() && c.TeeRing == "" {
+		return nil, fmt.Errorf("mc-join-enabled=false requires -tee-listen or -tee-ring: with neither multicast join nor tee ingest the cache never fills and every NACK is answered MISS")
 	}
 
 	// Parse Aerospike seed nodes.

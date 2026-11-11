@@ -71,6 +71,40 @@ func (s *Store) Store(key, value []byte, ttl time.Duration) error {
 	return s.b.Set(ctx, s.key(key), value, ttl)
 }
 
+// Owning returns a view of c whose Store hands the value over to the backend
+// instead of lending it (shard-common cache.OwnedSetter: the in-memory
+// backend keeps the slice, no copy), and true; the caller must not use a
+// value after storing it. When c's backend copies anyway (or c is not a
+// *Store) it returns c and false.
+func Owning(c Cache) (Cache, bool) {
+	s, ok := c.(*Store)
+	if !ok {
+		return c, false
+	}
+	o, ok := s.b.(scache.OwnedSetter)
+	if !ok {
+		return c, false
+	}
+	return &owningStore{s: s, o: o}, true
+}
+
+type owningStore struct {
+	s *Store
+	o scache.OwnedSetter
+}
+
+// Store writes the frame value under key with ttl; value belongs to the
+// backend afterward.
+func (v *owningStore) Store(key, value []byte, ttl time.Duration) error {
+	ctx, cancel := v.s.opCtx()
+	defer cancel()
+	return v.o.SetOwned(ctx, v.s.key(key), value, ttl)
+}
+
+func (v *owningStore) Retrieve(key []byte) ([]byte, error) { return v.s.Retrieve(key) }
+func (v *owningStore) Delete(key []byte) error             { return v.s.Delete(key) }
+func (v *owningStore) Close() error                        { return v.s.Close() }
+
 // Retrieve returns the frame value for key, or (nil, nil) on miss.
 func (s *Store) Retrieve(key []byte) ([]byte, error) {
 	ctx, cancel := s.opCtx()

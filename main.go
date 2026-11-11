@@ -8,6 +8,8 @@ import (
 	"hash/crc32"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"sync"
@@ -521,6 +523,22 @@ func run() error {
 		defer wg.Done()
 		rec.Serve(cfg.MetricsAddr, done)
 	}()
+	if cfg.PprofListen != "" {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		srv := &http.Server{Addr: cfg.PprofListen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		go func() {
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Warn("pprof listener", "addr", cfg.PprofListen, "err", err)
+			}
+		}()
+		go func() { <-done; _ = srv.Close() }()
+		slog.Info("pprof listening", "addr", cfg.PprofListen)
+	}
 
 	// Start cache size sampler (samples Len() every 15s). Len() is meaningful
 	// only for the in-memory backend; remote backends report 0.
@@ -565,7 +583,20 @@ func run() error {
 			}()
 		}
 	} else {
-		slog.Info("multicast join disabled: tee-only ingest", "tee_listen", cfg.TeeListen.String())
+		slog.Info("multicast join disabled: tee-only ingest", "tee_listen", cfg.TeeListen.String(), "tee_ring", cfg.TeeRing)
+	}
+	if cfg.TeeRing != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ing.RunTeeRing(ctx, cfg.TeeRing); err != nil && ctx.Err() == nil {
+				slog.Error("tee ring ingress exited with error", "err", err)
+				select {
+				case fatalCh <- fmt.Errorf("tee ring ingress: %w", err):
+				default:
+				}
+			}
+		}()
 	}
 	if cfg.TeeListen.IsValid() {
 		wg.Add(1)
