@@ -337,8 +337,12 @@ collector has no entries to walk.
 - TTLs and `-cache-max-keys` apply as without it. A fragment is also gone once
   the block has wrapped around over it, oldest first.
 - The block's memory becomes resident as it is first written and stays
-  resident. Set `GOMEMLIMIT` above the block's size with a few hundred MB to
-  spare; it no longer needs twice the cache.
+  resident. The index is kept outside the block and costs about 100 bytes for
+  each fragment cached, so it grows with the number of fragments, not their
+  size. Set `GOMEMLIMIT` to the block's size, plus 100 bytes times the most
+  fragments the cache can hold (`-cache-max-keys`, or the block's size divided
+  by the smallest fragment), plus a few hundred MB; it no longer needs twice
+  the cache.
 - Fed from the tee ring (`-tee-ring`), a fragment is copied once, from the ring
   into the block.
 

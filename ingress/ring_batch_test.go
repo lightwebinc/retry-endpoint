@@ -25,7 +25,7 @@ import (
 func TestRunTeeRing_Runs(t *testing.T) {
 	b := memory.New(0)
 	defer func() { _ = b.Close() }()
-	ringRuns(t, b, true)
+	ringRuns(t, b, true, nil)
 }
 
 // The same feed over the arena backend: each frame is leased out of the ring
@@ -36,7 +36,7 @@ func TestRunTeeRing_RunsOverArena(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = b.Close() }()
-	ringRuns(t, b, true)
+	ringRuns(t, b, true, nil)
 	if n := b.Leased(); n != 0 {
 		t.Fatalf("%d leases left outstanding", n)
 	}
@@ -52,15 +52,26 @@ func TestRunTeeRing_ArenaLaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = b.Close() }()
-	ringRuns(t, b, false)
+	ringRuns(t, b, false, func() {
+		// Idle: no lease out for 50 checks in a row.
+		for idle := 0; idle < 50; {
+			if b.Leased() == 0 {
+				idle++
+			} else {
+				idle = 0
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
 	if n := b.Leased(); n != 0 {
 		t.Fatalf("%d leases left outstanding", n)
 	}
 }
 
 // ringRuns feeds a ring the way a proxy does and checks what the cache
-// holds: every frame when all, else only that no frame is stored wrong.
-func ringRuns(t *testing.T, b scache.Backend, all bool) {
+// holds: every frame when all, else that no frame is stored wrong and that
+// a last frame, written after settle returns, is stored.
+func ringRuns(t *testing.T, b scache.Backend, all bool, settle func()) {
 	t.Helper()
 	store := cache.NewStore(b, "bre:frame:", time.Second)
 	w := &Worker{cache: store, ttls: TTLConfig{Tx: time.Minute, Block: time.Minute, Subtree: time.Minute, Anchor: time.Minute, BEEF: time.Minute},
@@ -145,12 +156,30 @@ func ringRuns(t *testing.T, b scache.Backend, all bool) {
 		binary.BigEndian.PutUint64(k[8:16], s)
 		return k[:]
 	}
+	if settle != nil {
+		// Once the pipeline is idle nothing is leased, so one more frame is
+		// stored whatever the feed before it did to the cache.
+		settle()
+		raw := frame(300)
+		for {
+			err := p.Write(raw)
+			if err == nil {
+				break
+			}
+			retry("last write", err)
+		}
+	}
+	stored := false
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if v, _ := store.Retrieve(key(seq)); v != nil {
+			stored = true
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	if !stored {
+		t.Fatalf("the newest frame (%d) was not stored", seq)
 	}
 	cancel()
 	select {
