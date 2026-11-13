@@ -322,6 +322,26 @@ well under `GOMEMLIMIT`: a heap held at the limit leaves the collector no room,
 and it then runs without pause. A perf edge carrying 1 GB/s for a 4 GiB object
 needs about 4.5 GB here and a `GOMEMLIMIT` near twice that.
 
+### `-cache-arena-bytes` / `CACHE_ARENA_BYTES` (default: `0`)
+
+With a positive value the in-memory cache keeps its fragments in one block of
+this many bytes, allocated when the endpoint starts, instead of allocating each
+fragment (0, the default, allocates each). Ignored by the `redis` and
+`aerospike` backends. It is for an endpoint whose cache turns over fast: a
+store is then a copy into the block, nothing is allocated per fragment, and the
+collector has no entries to walk.
+
+- The block is the byte cap: it holds the most recent bytes stored, whatever
+  their TTL, and `-cache-max-bytes` is not read. Size it the same way, as the
+  plane's rate times the repair window.
+- TTLs and `-cache-max-keys` apply as without it. A fragment is also gone once
+  the block has wrapped around over it, oldest first.
+- The block's memory becomes resident as it is first written and stays
+  resident. Set `GOMEMLIMIT` above the block's size with a few hundred MB to
+  spare; it no longer needs twice the cache.
+- Fed from the tee ring (`-tee-ring`), a fragment is copied once, from the ring
+  into the block.
+
 ---
 
 ## NACK Server

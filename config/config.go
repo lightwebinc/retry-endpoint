@@ -113,6 +113,7 @@ type Config struct {
 	CacheTTL         time.Duration
 	CacheMaxKeys     int // Maximum number of keys in cache (0 = no limit)
 	CacheMaxBytes    int // Maximum bytes of cached fragments, memory backend (0 = no limit)
+	CacheArenaBytes  int // Memory backend: keep fragments in one block of this size (0 = allocate each)
 
 	// Per-FrameVer TTLs. Resolution order applied in Load():
 	//   1. explicit semantic flag/env (e.g. CACHE_TTL_TX): wins
@@ -265,6 +266,8 @@ func Load() (*Config, error) {
 		"maximum number of keys in cache (0 = no limit)")
 	flag.IntVar(&c.CacheMaxBytes, "cache-max-bytes", envInt("CACHE_MAX_BYTES", 0),
 		"maximum bytes of cached fragments in the memory backend (0 = no limit); size it as the repair window times the plane's rate, under GOMEMLIMIT with room for the collector")
+	flag.IntVar(&c.CacheArenaBytes, "cache-arena-bytes", envInt("CACHE_ARENA_BYTES", 0),
+		"memory backend: keep cached fragments in one block of this many bytes, allocated at start (0 = allocate each fragment); the block's size is then the byte cap and -cache-max-bytes is not read")
 
 	flag.IntVar(&c.NACKPort, "nack-port", envInt("NACK_PORT", 9300),
 		"NACK listen port")

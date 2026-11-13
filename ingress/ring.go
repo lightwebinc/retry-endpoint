@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	scache "github.com/lightwebinc/shard-common/cache"
 	"github.com/lightwebinc/shard-common/teering"
 	"github.com/lightwebinc/shard-common/teewire"
 
@@ -92,6 +93,7 @@ func (w *Worker) receiveRing(ctx context.Context, c *teering.Consumer) {
 	total := per*procs + procs + recvBatchSize
 	pw := w
 	owning, owned := cache.Owning(w.cache)
+	leaser, leased := cache.Leasing(w.cache)
 	if owned {
 		ow := *w
 		ow.cache = owning
@@ -100,7 +102,7 @@ func (w *Worker) receiveRing(ctx context.Context, c *teering.Consumer) {
 	free := make(chan *slot, total)
 	for range total {
 		s := &slot{}
-		if !owned {
+		if !owned && !leased {
 			s.buf = make([]byte, slotSize)
 		}
 		free <- s
@@ -112,8 +114,22 @@ func (w *Worker) receiveRing(ctx context.Context, c *teering.Consumer) {
 		queues[i] = q
 		wg.Go(func() {
 			p := processor{w: pw, tee: true}
+			var view *cache.LeaseView
+			if leased {
+				// A view of the cache of this goroutine's own: its Store
+				// commits the datagram it was handed in place.
+				lw := *w
+				view = leaser.View()
+				lw.cache = view
+				p.w = &lw
+			}
 			for s := range q {
-				p.handle(s)
+				if view == nil {
+					p.handle(s)
+				} else {
+					view.Handle(s.lease, func() { p.handle(s) })
+					s.lease, s.buf = scache.Lease{}, nil
+				}
 				free <- s
 			}
 		})
@@ -124,6 +140,14 @@ func (w *Worker) receiveRing(ctx context.Context, c *teering.Consumer) {
 		}
 		wg.Wait()
 	}()
+	// back returns a slot no processor will see, and its lease with it.
+	back := func(s *slot) {
+		if s.lease.Buf != nil {
+			leaser.Release(s.lease)
+			s.lease, s.buf = scache.Lease{}, nil
+		}
+		free <- s
+	}
 	var loopback [16]byte
 	loopback[15] = 1
 	done := ctx.Done()
@@ -139,7 +163,20 @@ func (w *Worker) receiveRing(ctx context.Context, c *teering.Consumer) {
 		}
 		s := <-free
 		var n int
-		if owned {
+		if leased {
+			// One copy, into the cache's own memory. When the cache cannot
+			// lease now (see cache/arena) the datagram takes memory of its
+			// own and the cache copies it.
+			if v := c.Peek(); v != nil {
+				if s.lease = leaser.Lease(v); s.lease.Buf != nil {
+					s.buf = s.lease.Buf
+				} else {
+					s.buf = append([]byte(nil), v...)
+				}
+				n = len(v)
+				c.Advance()
+			}
+		} else if owned {
 			// One copy, into memory the cache will keep.
 			if v := c.Peek(); v != nil {
 				s.buf = append([]byte(nil), v...)
@@ -150,7 +187,7 @@ func (w *Worker) receiveRing(ctx context.Context, c *teering.Consumer) {
 			n = c.Next(s.buf)
 		}
 		if n == 0 {
-			free <- s
+			back(s)
 			if l := c.Lost(); l != lost {
 				for range l - lost {
 					w.dropped("ring_lost")
@@ -180,7 +217,7 @@ func (w *Worker) receiveRing(ctx context.Context, c *teering.Consumer) {
 		if teewire.IsEncap(s.buf[:n]) {
 			// Raw frames only: an envelope would assert a source.
 			w.dropped("ring_encap")
-			free <- s
+			back(s)
 			continue
 		}
 		s.n, s.v6, s.from, s.trunc = n, true, loopback, false
@@ -199,9 +236,9 @@ func (w *Worker) receiveRing(ctx context.Context, c *teering.Consumer) {
 				}
 			case <-wait.C:
 				w.dropped("queue_full")
-				free <- s
+				back(s)
 			case <-done:
-				free <- s
+				back(s)
 				return
 			}
 		}

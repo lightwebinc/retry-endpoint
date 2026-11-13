@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	scache "github.com/lightwebinc/shard-common/cache"
+	"github.com/lightwebinc/shard-common/cache/arena"
 	"github.com/lightwebinc/shard-common/cache/memory"
 	"github.com/lightwebinc/shard-common/teering"
 
@@ -23,6 +25,43 @@ import (
 func TestRunTeeRing_Runs(t *testing.T) {
 	b := memory.New(0)
 	defer func() { _ = b.Close() }()
+	ringRuns(t, b, true)
+}
+
+// The same feed over the arena backend: each frame is leased out of the ring
+// into the cache's block and committed there, and every lease is released.
+func TestRunTeeRing_RunsOverArena(t *testing.T) {
+	b, err := arena.New(arena.Options{Bytes: 8 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	ringRuns(t, b, true)
+	if n := b.Leased(); n != 0 {
+		t.Fatalf("%d leases left outstanding", n)
+	}
+}
+
+// An arena far smaller than the feed: it wraps over its own entries all the
+// time and at times cannot lease. A frame is then stored or it is not, but a
+// lookup never returns another frame's bytes, the newest frame is there, and
+// no lease is left outstanding.
+func TestRunTeeRing_ArenaLaps(t *testing.T) {
+	b, err := arena.New(arena.Options{Bytes: 256 << 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	ringRuns(t, b, false)
+	if n := b.Leased(); n != 0 {
+		t.Fatalf("%d leases left outstanding", n)
+	}
+}
+
+// ringRuns feeds a ring the way a proxy does and checks what the cache
+// holds: every frame when all, else only that no frame is stored wrong.
+func ringRuns(t *testing.T, b scache.Backend, all bool) {
+	t.Helper()
 	store := cache.NewStore(b, "bre:frame:", time.Second)
 	w := &Worker{cache: store, ttls: TTLConfig{Tx: time.Minute, Block: time.Minute, Subtree: time.Minute, Anchor: time.Minute, BEEF: time.Minute},
 		log: slog.Default().With("component", "ingress-test")}
@@ -122,11 +161,19 @@ func TestRunTeeRing_Runs(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("RunTeeRing did not exit after cancel")
 	}
+	hits := 0
 	for i, f := range want {
 		v, err := store.Retrieve(key(uint64(i + 1)))
+		if v == nil && err == nil && !all {
+			continue
+		}
+		hits++
 		if err != nil || !bytes.Equal(v, f) {
 			t.Fatalf("frame %d: %d bytes stored, want %d (err %v)", i+1, len(v), len(f), err)
 		}
+	}
+	if hits == 0 {
+		t.Fatal("nothing stored")
 	}
 	if p.Dropped() != 0 || p.Pinned() != 0 {
 		t.Fatalf("producer dropped %d, pinned %d", p.Dropped(), p.Pinned())
