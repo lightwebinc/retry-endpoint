@@ -342,7 +342,10 @@ collector has no entries to walk.
   size. Set `GOMEMLIMIT` to the block's size, plus 100 bytes times the most
   fragments the cache can hold (`-cache-max-keys`, or the block's size divided
   by the smallest fragment), plus a few hundred MB; it no longer needs twice
-  the cache.
+  the cache. Without a key cap, an entry the block has wrapped over stays in
+  the index until the next expiry pass (250 ms), so count a quarter second of
+  fragments at the peak rate as well. For small fragments at a high rate,
+  measure: `go_memstats_heap_inuse_bytes` less the block is the index.
 - Fed from the tee ring (`-tee-ring`), a fragment is copied once, from the ring
   into the block.
 

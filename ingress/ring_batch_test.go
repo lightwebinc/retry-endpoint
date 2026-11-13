@@ -54,7 +54,11 @@ func TestRunTeeRing_ArenaLaps(t *testing.T) {
 	defer func() { _ = b.Close() }()
 	ringRuns(t, b, false, func() {
 		// Idle: no lease out for 50 checks in a row.
+		deadline := time.Now().Add(10 * time.Second)
 		for idle := 0; idle < 50; {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d leases still outstanding after the feed", b.Leased())
+			}
 			if b.Leased() == 0 {
 				idle++
 			} else {
