@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	scache "github.com/lightwebinc/shard-common/cache"
 	"github.com/lightwebinc/shard-common/teewire"
 )
 
@@ -60,6 +61,9 @@ type slot struct {
 	from  [16]byte // datagram source when v6
 	v6    bool
 	trunc bool // the datagram did not fit buf
+	// lease is set when buf is the cache's own memory (the ring ingest over
+	// a leasing cache): the processor releases it after handling.
+	lease scache.Lease
 }
 
 // SetPipeline sets the receive queue depth (datagrams per socket) and the

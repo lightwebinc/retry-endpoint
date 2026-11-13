@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/alicebob/miniredis/v2 v2.40.0
-	github.com/lightwebinc/shard-common v0.26.0
+	github.com/lightwebinc/shard-common v0.27.0
 	github.com/prometheus/client_golang v1.25.0
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.43.0

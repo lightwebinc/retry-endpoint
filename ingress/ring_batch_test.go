@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	scache "github.com/lightwebinc/shard-common/cache"
+	"github.com/lightwebinc/shard-common/cache/arena"
 	"github.com/lightwebinc/shard-common/cache/memory"
 	"github.com/lightwebinc/shard-common/teering"
 
@@ -23,6 +25,58 @@ import (
 func TestRunTeeRing_Runs(t *testing.T) {
 	b := memory.New(0)
 	defer func() { _ = b.Close() }()
+	ringRuns(t, b, true, nil)
+}
+
+// The same feed over the arena backend: each frame is leased out of the ring
+// into the cache's block and committed there, and every lease is released.
+func TestRunTeeRing_RunsOverArena(t *testing.T) {
+	b, err := arena.New(arena.Options{Bytes: 8 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	ringRuns(t, b, true, nil)
+	if n := b.Leased(); n != 0 {
+		t.Fatalf("%d leases left outstanding", n)
+	}
+}
+
+// An arena far smaller than the feed: it wraps over its own entries all the
+// time and at times cannot lease. A frame is then stored or it is not, but a
+// lookup never returns another frame's bytes, the newest frame is there, and
+// no lease is left outstanding.
+func TestRunTeeRing_ArenaLaps(t *testing.T) {
+	b, err := arena.New(arena.Options{Bytes: 256 << 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = b.Close() }()
+	ringRuns(t, b, false, func() {
+		// Idle: no lease out for 50 checks in a row.
+		deadline := time.Now().Add(10 * time.Second)
+		for idle := 0; idle < 50; {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d leases still outstanding after the feed", b.Leased())
+			}
+			if b.Leased() == 0 {
+				idle++
+			} else {
+				idle = 0
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
+	if n := b.Leased(); n != 0 {
+		t.Fatalf("%d leases left outstanding", n)
+	}
+}
+
+// ringRuns feeds a ring the way a proxy does and checks what the cache
+// holds: every frame when all, else that no frame is stored wrong and that
+// a last frame, written after settle returns, is stored.
+func ringRuns(t *testing.T, b scache.Backend, all bool, settle func()) {
+	t.Helper()
 	store := cache.NewStore(b, "bre:frame:", time.Second)
 	w := &Worker{cache: store, ttls: TTLConfig{Tx: time.Minute, Block: time.Minute, Subtree: time.Minute, Anchor: time.Minute, BEEF: time.Minute},
 		log: slog.Default().With("component", "ingress-test")}
@@ -106,12 +160,30 @@ func TestRunTeeRing_Runs(t *testing.T) {
 		binary.BigEndian.PutUint64(k[8:16], s)
 		return k[:]
 	}
+	if settle != nil {
+		// Once the pipeline is idle nothing is leased, so one more frame is
+		// stored whatever the feed before it did to the cache.
+		settle()
+		raw := frame(300)
+		for {
+			err := p.Write(raw)
+			if err == nil {
+				break
+			}
+			retry("last write", err)
+		}
+	}
+	stored := false
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if v, _ := store.Retrieve(key(seq)); v != nil {
+			stored = true
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	if !stored {
+		t.Fatalf("the newest frame (%d) was not stored", seq)
 	}
 	cancel()
 	select {
@@ -122,11 +194,19 @@ func TestRunTeeRing_Runs(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("RunTeeRing did not exit after cancel")
 	}
+	hits := 0
 	for i, f := range want {
 		v, err := store.Retrieve(key(uint64(i + 1)))
+		if v == nil && err == nil && !all {
+			continue
+		}
+		hits++
 		if err != nil || !bytes.Equal(v, f) {
 			t.Fatalf("frame %d: %d bytes stored, want %d (err %v)", i+1, len(v), len(f), err)
 		}
+	}
+	if hits == 0 {
+		t.Fatal("nothing stored")
 	}
 	if p.Dropped() != 0 || p.Pinned() != 0 {
 		t.Fatalf("producer dropped %d, pinned %d", p.Dropped(), p.Pinned())
