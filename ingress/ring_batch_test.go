@@ -33,8 +33,24 @@ func TestRunTeeRing_Runs(t *testing.T) {
 	}
 	defer func() { _ = p.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	exited := make(chan error, 1)
 	go func() { exited <- w.RunTeeRing(ctx, path) }()
+	// One deadline bounds the whole ingest: a ring that stops draining, or
+	// a consumer that returned early, fails the test instead of hanging it.
+	ingestBy := time.Now().Add(30 * time.Second)
+	retry := func(what string, err error) {
+		t.Helper()
+		select {
+		case rerr := <-exited:
+			t.Fatalf("%s: RunTeeRing returned early: %v", what, rerr)
+		default:
+		}
+		if time.Now().After(ingestBy) {
+			t.Fatalf("%s: ring not draining: %v", what, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
 
 	const hash = 0x7777222233334444
 	var want [][]byte
@@ -66,7 +82,7 @@ func TestRunTeeRing_Runs(t *testing.T) {
 			if r, err = p.Reserve(total); err == nil {
 				break
 			}
-			time.Sleep(time.Millisecond)
+			retry("reserve", err)
 		}
 		off := 0
 		for _, f := range frames {
@@ -76,8 +92,12 @@ func TestRunTeeRing_Runs(t *testing.T) {
 		p.Unpin(r)
 		// And a single frame the ordinary way.
 		raw := frame(300)
-		for p.Write(raw) != nil {
-			time.Sleep(time.Millisecond)
+		for {
+			err := p.Write(raw)
+			if err == nil {
+				break
+			}
+			retry("write", err)
 		}
 	}
 	key := func(s uint64) []byte {
@@ -94,8 +114,13 @@ func TestRunTeeRing_Runs(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	cancel()
-	if err := <-exited; err != nil {
-		t.Fatalf("RunTeeRing: %v", err)
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Fatalf("RunTeeRing: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunTeeRing did not exit after cancel")
 	}
 	for i, f := range want {
 		v, err := store.Retrieve(key(uint64(i + 1)))
