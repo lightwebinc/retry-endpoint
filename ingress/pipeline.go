@@ -21,6 +21,13 @@ import (
 // decoded and stored, so a slow store, a GC assist or a burst no longer backs
 // up into the kernel buffer one datagram at a time.
 //
+// With receive GRO a slot can hold a run of datagrams from one sender, and
+// the run goes to the processor its first datagram selects. A duplicate of
+// one of the others (the same frame from the tee feed) can then be stored by
+// another processor at the same time; both write the same bytes under the
+// same key into a cache that is safe for concurrent use, so the outcome is
+// the frame either way.
+//
 // Ordering: a datagram goes to the processor chosen by its cache key
 // (HashKey, SeqNum), so every write of one key, including the duplicate a
 // node can receive from both the multicast and the tee feed, is made by one
@@ -56,8 +63,12 @@ const (
 
 // slot is one received datagram in a reusable buffer.
 type slot struct {
-	buf   []byte
-	n     int
+	buf []byte
+	n   int
+	// seg is the length of the datagrams in buf[:n] when the kernel coalesced
+	// a run of them into this one message (receive GRO): each is seg bytes but
+	// the last, which may be shorter. 0 = buf[:n] is one datagram.
+	seg   int
 	from  [16]byte // datagram source when v6
 	v6    bool
 	trunc bool // the datagram did not fit buf
@@ -226,11 +237,18 @@ func (p *processor) handle(s *slot) {
 		// (SSM: one (S,G) per publisher); it labels the per-source cache
 		// counters so a retry starved of ONE source's frames is a zero rate,
 		// not an invisible absence.
+		src := ""
 		if s.v6 {
-			w.processFrame(pkt, p.label(s.from))
-		} else {
-			w.processFrame(pkt, "")
+			src = p.label(s.from)
 		}
+		// A coalesced run (receive GRO): its datagrams, in arrival order.
+		if s.seg > 0 {
+			for len(pkt) > s.seg {
+				w.processFrame(pkt[:s.seg], src)
+				pkt = pkt[s.seg:]
+			}
+		}
+		w.processFrame(pkt, src)
 		return
 	}
 	if teewire.IsEncap(pkt) {

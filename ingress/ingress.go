@@ -106,8 +106,16 @@ type Worker struct {
 	// Receive pipeline per socket (see pipeline.go); 0 = default.
 	queueDepth int
 	procs      int
-	log        *slog.Logger
+	// gro asks for coalesced runs on the multicast socket (SetRecvGRO).
+	gro bool
+	log *slog.Logger
 }
+
+// SetRecvGRO turns receive GRO on for the worker's multicast socket: the
+// kernel hands over runs of equal datagrams from one sender as one message
+// (UDP_GRO, Linux) and the processor splits each back into its datagrams.
+// Must be called before [Worker.Run].
+func (w *Worker) SetRecvGRO(on bool) { w.gro = on }
 
 // SetRecvBuf sets the receive buffer asked for the worker's multicast socket
 // and its tee socket. Must be called before [Worker.Run] or [Worker.RunTee].
@@ -220,7 +228,13 @@ func (w *Worker) Run(ctx context.Context) error {
 		defer w.rec.WorkerDone()
 	}
 
-	w.log.Info("ingress worker ready", "iface", w.iface.Name, "port", w.port, "groups", len(w.groups))
+	if w.gro {
+		if err := enableGRO(fd); err != nil {
+			w.log.Warn("receive GRO not available: reading single datagrams", "err", err)
+		}
+	}
+
+	w.log.Info("ingress worker ready", "iface", w.iface.Name, "port", w.port, "groups", len(w.groups), "gro", w.gro)
 
 	tv := unix.NsecToTimeval((200 * time.Millisecond).Nanoseconds())
 	_ = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)

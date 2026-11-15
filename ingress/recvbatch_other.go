@@ -21,9 +21,12 @@ func (r *batchReader) read(slots []*slot) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	s.n, s.trunc, s.v6 = n, false, false
+	s.n, s.seg, s.trunc, s.v6 = n, 0, false, false
 	if sa, ok := from.(*unix.SockaddrInet6); ok {
 		s.from, s.v6 = sa.Addr, true
 	}
 	return 1, nil
 }
+
+// enableGRO is Linux's; elsewhere every message is one datagram.
+func enableGRO(int) error { return unix.ENOPROTOOPT }

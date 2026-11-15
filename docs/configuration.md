@@ -53,6 +53,19 @@ arrival order, while a single flow still spreads across all of them. On a
 loopback benchmark with `GOMAXPROCS=4` and 9000-byte datagrams, one goroutine
 held about 140k datagrams per second and four held 250k without loss.
 
+### `-ingress-gro` / `INGRESS_GRO` (default: `false`)
+
+Receive GRO on each multicast ingress socket (`UDP_GRO`, Linux). A proxy sends a
+plane's fragments in runs of equal datagrams, and with the option the kernel
+hands such a run over as one message; the processing goroutine splits it back
+into its datagrams, in order, and stores each. The kernel then queues and
+hands over one buffer where it handled several, which is most of what a flow
+of 9000-byte fragments costs a slow core before the copy: on a 2.3 GHz host
+receiving 950 MB/s, the core doing the NIC's receive work went from 60 to 89%
+busy to about 16%. A run goes to the processing goroutine its first datagram
+selects. A kernel without `UDP_GRO` is logged and read as before. The tee
+socket is not affected.
+
 ### `-tee-listen` / `TEE_LISTEN` (default: empty = disabled)
 
 IPv6 loopback `host:port` literal (e.g. `[::1]:9002`) for the dedicated
