@@ -219,8 +219,16 @@ whole-object burst. Each socket (the tee's too) is drained by one goroutine
 that receives in batches (`recvmmsg` on Linux) into a ring of reusable buffers
 and queues each datagram (`-ingress-queue-depth`) to one of
 `-ingress-procs` processing goroutines, chosen by the frame's cache key, so
-every write of one key keeps its arrival order. A queue that stays full for
-100 ms drops the datagram as `bre_frames_dropped_total{reason="queue_full"}`. Group memberships are re-asserted every 30 s
+every write of one key keeps its arrival order. With `-ingress-gro` the
+multicast sockets take coalesced runs (`UDP_GRO`): a run is one queued slot,
+split into its datagrams by the processing goroutine its first datagram
+selects. The order then holds within a run, not for every write of one key: a
+run's later datagrams are stored by the first one's goroutine, so a second
+copy of one of them (a duplicate, or the tee's) can be stored by its own key's
+goroutine before or after. Both write the same bytes under the same key, so
+the cache holds the frame either way. A queue that stays full for
+100 ms drops the datagram as `bre_frames_dropped_total{reason="queue_full"}`;
+a run dropped that way counts each of its datagrams. Group memberships are re-asserted every 30 s
 for the life of the socket: a kernel membership can be lost underneath a running
 socket when the forwarding state it depends on changes (a multicast RPF move
 after a routing re-convergence, a forwarder restart, an interface rebuild) with

@@ -169,6 +169,7 @@ type Config struct {
 	RecvBufBytes int           // SO_RCVBUF asked for each ingress socket, multicast and tee (-ingress-recv-buf-bytes)
 	QueueDepth   int           // Datagrams queued between receive and processing, per ingress socket (-ingress-queue-depth)
 	IngressProcs int           // Processing goroutines per ingress socket (-ingress-procs)
+	IngressGRO   bool          // Receive GRO on the multicast ingress sockets (-ingress-gro)
 	Debug        bool          // Enable per-packet debug logging
 	DrainTimeout time.Duration // Pre-drain delay before closing sockets
 
@@ -282,6 +283,8 @@ func Load() (*Config, error) {
 		"datagrams queued between an ingress socket's receive loop and its processors. The receive loop drains the socket in batches and never decodes or stores, so the kernel buffer empties while frames are processed. When the queue stays full past 100 ms the datagram is dropped and counted (bre_frames_dropped_total{reason=\"queue_full\"})")
 	flag.IntVar(&c.IngressProcs, "ingress-procs", envInt("INGRESS_PROCS", 4),
 		"processing goroutines per ingress socket, multicast and tee. Each datagram goes to the one chosen by its cache key (HashKey, SeqNum), so every write of one key keeps its order")
+	flag.BoolVar(&c.IngressGRO, "ingress-gro", envBool("INGRESS_GRO", false),
+		"receive GRO on each multicast ingress socket (UDP_GRO, Linux): the kernel hands a run of equal datagrams from one sender over as one message and the processor splits it, so a plane of large fragments costs a fraction of the kernel queue work and socket reads; a kernel without it is logged and read as before")
 	egressFlag := flag.String("egress-iface", envStr("EGRESS_IFACE", "eth0"),
 		"comma-separated NIC names for multicast egress")
 	flag.IntVar(&c.EgressPort, "egress-port", envInt("EGRESS_PORT", 9001),

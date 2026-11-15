@@ -283,3 +283,61 @@ func TestShardOf_SameKeySameShardInBothForms(t *testing.T) {
 		t.Fatalf("one flow reached %d of 4 processors", len(seen))
 	}
 }
+
+// TestProcessor_SplitsACoalescedRun: a slot that holds a run of datagrams
+// (receive GRO: seg bytes each, a shorter tail) is stored as its datagrams,
+// in order, and a slot without a segment length as the one datagram it is.
+func TestProcessor_SplitsACoalescedRun(t *testing.T) {
+	oc := &orderCache{}
+	w := newTestWorker(nil)
+	w.cache = oc
+	p := processor{w: w}
+
+	// Three frames of one length and a shorter one, back to back.
+	a := buildRaw(t, 7, 1, []byte{0, 0, 0, 0})
+	b := buildRaw(t, 7, 2, []byte{0, 1, 0, 0})
+	c := buildRaw(t, 7, 3, []byte{0, 2, 0, 0})
+	d := buildRaw(t, 7, 4, []byte{0, 3})
+	if len(a) != len(b) || len(b) != len(c) || len(d) >= len(a) {
+		t.Fatalf("frame lengths %d %d %d %d: want three equal and a shorter tail", len(a), len(b), len(c), len(d))
+	}
+	s := &slot{buf: make([]byte, slotSize), v6: true}
+	s.n = copy(s.buf, a)
+	s.n += copy(s.buf[s.n:], b)
+	s.n += copy(s.buf[s.n:], c)
+	s.n += copy(s.buf[s.n:], d)
+	s.seg = len(a)
+	p.handle(s)
+	if got := oc.count(); got != 4 {
+		t.Fatalf("a run of four datagrams stored %d", got)
+	}
+
+	// Without a segment length the slot is one datagram.
+	s.n, s.seg = copy(s.buf, buildRaw(t, 7, 5, []byte{0, 4})), 0
+	p.handle(s)
+	if got := oc.count(); got != 5 {
+		t.Fatalf("stored %d after a single datagram, want 5", got)
+	}
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	if len(oc.byKey) != 5 {
+		t.Fatalf("%d keys stored, want 5", len(oc.byKey))
+	}
+}
+
+// TestSlotDatagrams: a slot counts as the datagrams it holds, so a run
+// dropped with its slot is counted in full.
+func TestSlotDatagrams(t *testing.T) {
+	for _, tc := range []struct{ n, seg, want int }{
+		{1200, 0, 1},    // a single datagram
+		{1200, 1200, 1}, // a "run" of one
+		{3600, 1200, 3}, // three equal datagrams
+		{3900, 1200, 4}, // three and a shorter tail
+		{9000, 9000, 1},
+		{63000, 9000, 7},
+	} {
+		if got := (&slot{n: tc.n, seg: tc.seg}).datagrams(); got != tc.want {
+			t.Errorf("n=%d seg=%d: %d datagrams, want %d", tc.n, tc.seg, got, tc.want)
+		}
+	}
+}
