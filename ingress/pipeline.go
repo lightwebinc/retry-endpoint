@@ -95,6 +95,15 @@ func (w *Worker) pipelineSize() (depth, procs int) {
 	return depth, procs
 }
 
+// datagrams is how many datagrams the slot holds: one, or those of the run
+// the kernel coalesced into it.
+func (s *slot) datagrams() int {
+	if s.seg <= 0 || s.n <= s.seg {
+		return 1
+	}
+	return (s.n + s.seg - 1) / s.seg
+}
+
 func (w *Worker) dropped(reason string) {
 	if w.rec != nil {
 		w.rec.FrameDropped(reason)
@@ -183,7 +192,11 @@ func (w *Worker) receive(ctx context.Context, fd int, tee bool) {
 				case q <- s:
 					wait.Stop()
 				case <-wait.C:
-					w.dropped("queue_full")
+					// A coalesced run is lost with its slot: count each
+					// of its datagrams, as the cache would have stored them.
+					for range s.datagrams() {
+						w.dropped("queue_full")
+					}
 					continue // the slot stays in the batch
 				case <-done:
 					wait.Stop()

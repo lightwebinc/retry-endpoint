@@ -324,3 +324,20 @@ func TestProcessor_SplitsACoalescedRun(t *testing.T) {
 		t.Fatalf("%d keys stored, want 5", len(oc.byKey))
 	}
 }
+
+// TestSlotDatagrams: a slot counts as the datagrams it holds, so a run
+// dropped with its slot is counted in full.
+func TestSlotDatagrams(t *testing.T) {
+	for _, tc := range []struct{ n, seg, want int }{
+		{1200, 0, 1},    // a single datagram
+		{1200, 1200, 1}, // a "run" of one
+		{3600, 1200, 3}, // three equal datagrams
+		{3900, 1200, 4}, // three and a shorter tail
+		{9000, 9000, 1},
+		{63000, 9000, 7},
+	} {
+		if got := (&slot{n: tc.n, seg: tc.seg}).datagrams(); got != tc.want {
+			t.Errorf("n=%d seg=%d: %d datagrams, want %d", tc.n, tc.seg, got, tc.want)
+		}
+	}
+}
