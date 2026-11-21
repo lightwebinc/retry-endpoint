@@ -160,9 +160,11 @@ func ipKey(ip net.IP) [16]byte {
 
 // ── token bucket (per comparable key) ─────────────────────────────────────────
 
-// maxBucketKeys bounds each token-bucket map, as maxWindowKeys bounds each
-// sliding-window map: reached only under key diversity far above any real
-// source count, at which point keys whose bucket has refilled are swept.
+// maxBucketKeys is the token-bucket map size at which a new key first sweeps
+// the map, as maxWindowKeys is for the sliding windows. It is reached only
+// under key diversity far above any real source count. Buckets still
+// refilling are kept, so the map can grow past it while that many keys are
+// live, and then sweeps again each time it doubles.
 const maxBucketKeys = maxWindowKeys
 
 // bucketIdle is how long a key whose bucket cannot refill (a rate of zero or
@@ -174,13 +176,16 @@ const bucketIdle = time.Minute
 //
 // Its keys come from unauthenticated NACKs (a spoofable source address, and a
 // group index the NACK selects), so like the sliding windows the map is
-// bounded: a new key sweeps it once it holds sweepAt keys, and also once a
+// swept: a new key sweeps it once it holds sweepAt keys, and also once a
 // refill period has passed since the last sweep, so a burst of new sources
 // does not outlive itself. A sweep drops every bucket that has refilled. A
 // new key's bucket starts full, so dropping a full one changes no decision;
 // it only reclaims a key that an unauthenticated NACK was able to create. A
 // bucket with a non-positive rate never refills: it is dropped once idle for
-// bucketIdle instead.
+// bucketIdle instead. Buckets still refilling stay, so the map holds about
+// the keys seen in the last refill period (bucketIdle at a non-positive
+// rate). Refusing new keys at a hard cap would instead turn memory pressure
+// into a denial for every new source.
 type tokenBucketLimiter[K comparable] struct {
 	mu        sync.Mutex
 	limit     map[K]bucket

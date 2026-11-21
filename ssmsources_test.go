@@ -73,19 +73,23 @@ func TestBuildSSMGroupSources_BlockBroadcastFollowsPublishers(t *testing.T) {
 	}
 }
 
-// With no publisher list the block-broadcast group has no source list, so it
-// is joined any-source exactly like the shard groups, and that is warned
+// With no publisher left to join, none listed or only this node's own source
+// (which is never joined), the block-broadcast group has no source list, so
+// it is joined any-source exactly like the shard groups, and that is warned
 // about once at startup (PIM-SSM does not route such a join). The manifest
 // list still feeds no join. A tee-only endpoint joins nothing, so it is not
 // warned.
 func TestBuildSSMGroupSources_NoPublishers(t *testing.T) {
+	const own = "2001:db8::a03"
 	for _, tc := range []struct {
-		name  string
-		join  bool
-		warns int
+		name       string
+		join       bool
+		publishers []string
+		warns      int
 	}{
-		{"multicast join", true, 1},
-		{"tee only", false, 0},
+		{"multicast join", true, nil, 1},
+		{"tee only", false, nil, 0},
+		{"only own source listed", true, []string{own}, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
@@ -99,8 +103,10 @@ func TestBuildSSMGroupSources_NoPublishers(t *testing.T) {
 				MCGroupID:            shard.DefaultGroupID,
 				NumGroups:            4,
 				MCJoinEnabled:        tc.join,
+				BindSource:           own,
 				SSMBootstrapRefresh:  time.Minute,
 				SSMBootstrapManifest: []string{"2001:db8::f01"},
+				SSMPublishersStatic:  tc.publishers,
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()

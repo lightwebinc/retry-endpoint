@@ -131,10 +131,7 @@ func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.Grou
 	// Data-plane publisher sources: static publisher list (lab/CI).
 	// Production manifest-driven discovery wires the same groups, block-
 	// broadcast included, after parsing each manifest.
-	if len(cfg.SSMPublishersStatic) == 0 && cfg.MCJoinEnabled {
-		slog.Warn("ssm: no publisher sources; block-broadcast and data-plane groups are joined without a source filter, which PIM-SSM does not route",
-			"flag", "-ssm-publishers-static")
-	}
+	var srcs []netip.Addr
 	if len(cfg.SSMPublishersStatic) > 0 {
 		r := &bootstrap.Resolver{
 			Entries: cfg.SSMPublishersStatic,
@@ -143,7 +140,21 @@ func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.Grou
 		if err := r.Start(ctx); err != nil {
 			return nil, fmt.Errorf("publishers-static: %w", err)
 		}
-		srcs := excludeOwnSource(r.Current(), own)
+		srcs = excludeOwnSource(r.Current(), own)
+	}
+	// No publisher left to join, either none listed or only this node's own
+	// source (never joined, see excludeOwnSource): those groups get no source
+	// list, which ingress joins without a source filter. Say so once.
+	if len(srcs) == 0 {
+		if cfg.MCJoinEnabled {
+			reason := "unset"
+			if len(cfg.SSMPublishersStatic) > 0 {
+				reason = "only this node's own source (-bind-source) is listed"
+			}
+			slog.Warn("ssm: no publisher sources; block-broadcast and data-plane groups are joined without a source filter, which PIM-SSM does not route",
+				"flag", "-ssm-publishers-static", "reason", reason)
+		}
+	} else {
 		// Apply to every shard group address derived from MCPrefix/MCGroupID.
 		// The shard.Engine.Addr helper isn't visible here (no engine in
 		// main scope at this point), but iterating numGroups by index is

@@ -208,7 +208,8 @@ Data-plane publisher source list: the `(S,G)` sources joined for every shard
 group, the block-broadcast group (`0xFFFE`, whose frames the proxies emit)
 and, with `-beef-enabled`, the BEEF plane band. The endpoint does not
 consume shard manifests, so this list is its only source of data-plane
-sources; with it empty those groups are joined any-source
+sources. With it empty, or listing only this node's own source (which
+`-bind-source` keeps out of every join), those groups are joined any-source
 (`IPV6_JOIN_GROUP`), which PIM-SSM does not route, and a warning is logged at
 startup (not on a tee-only endpoint, which joins nothing). Fail-closed
 validation rejects > 16 entries without a manifest bootstrap.
@@ -571,11 +572,12 @@ has sent no NACK for a minute.
 ### `-rl-ip-burst` / `RL_IP_BURST` (default: `10`)
 
 Burst size for the per-source-IP token bucket. Allows short bursts above the
-sustained rate before limiting kicks in. The bucket map is bounded (100 000
-sources). A bucket that has refilled decides exactly as a new one would, so it
-is swept: when the map reaches the bound, and when a new source arrives a
-refill period (`burst / rate`, at most a minute) after the last sweep, so a
-burst of new sources does not outlive itself.
+sustained rate before limiting kicks in. The bucket map is swept of buckets
+that have refilled, which decide exactly as a new one would: when it reaches
+100 000 sources (then each time it doubles), and when a new source arrives a
+refill period (`burst / rate`, at most a minute) after the last sweep.
+Buckets still refilling stay, so the map holds about the sources seen in the
+last refill period, and a burst of new sources does not outlive itself.
 
 ### `-rl-sequence-max` / `RL_SEQUENCE_MAX` (default: `100`)
 
@@ -626,8 +628,8 @@ sent).
 
 Burst size for the per-`(srcIP, groupIdx)` token bucket. `groupIdx` is derived
 from the frame TxID using the same `shard.Engine` as the multicast egress path
-(`-shard-bits` must match). The bucket map is bounded like the IP tier's
-(100 000 pairs; refilled buckets are swept).
+(`-shard-bits` must match). Its bucket map is swept like the IP tier's (from
+100 000 pairs on; refilled buckets go).
 
 ### `-rl-throttle-response` / `RL_THROTTLE_RESPONSE` (default: `false`)
 
