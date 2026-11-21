@@ -1,7 +1,7 @@
 // Package ratelimit provides four-tier rate limiting for NACK requests:
 //
 //  1. Per-IP token bucket (overall flood protection).
-//  2. Per-SeqNum sliding window (per-gap retry cap).
+//  2. Per-(HashKey, SeqNum) sliding window (per-gap retry cap).
 //  3. Per-(srcIP, HashKey) sliding window (per-flow NACK storm cap).
 //  4. Per-(srcIP, groupIdx) token bucket (post-lookup retransmit bandwidth cap).
 //

@@ -29,12 +29,13 @@ import (
 // the frame either way.
 //
 // Ordering: a datagram goes to the processor chosen by its cache key
-// (HashKey, SeqNum), so every write of one key, including the duplicate a
-// node can receive from both the multicast and the tee feed, is made by one
-// goroutine in arrival order. Nothing else needs ordering: the key is unique
-// per frame, the cache is safe for concurrent use (the memory backend locks
-// per shard and reads its clock under that lock), and several ingress workers
-// already store into it concurrently.
+// (HashKey, SeqNum), so every write of one key from one socket is made by
+// one goroutine in arrival order. The duplicate a node can receive from both
+// the multicast and the tee feed is written by the other feed's processors:
+// the same bytes under the same key. Nothing else needs ordering: the key is
+// unique per frame, the cache is safe for concurrent use (the memory backend
+// locks per shard and reads its clock under that lock), and several ingress
+// workers already store into it concurrently.
 //
 // Ownership: a slot's bytes are valid only until the processor returns it to
 // the free list. The cache does not retain the slice it is given (the memory

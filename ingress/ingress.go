@@ -22,6 +22,9 @@
 // of identical bytes. Tee-only operation (join disabled) is the collapsed-node
 // end-state that frees the shared wildcard data port entirely.
 //
+// A third optional ingest, [Worker.RunTeeRing], reads mirrored raw frames from
+// a shared-memory ring instead of a socket (see ring.go).
+//
 // # Hot path per frame
 //
 //  1. Receive in batches (recvmmsg on Linux; SO_RCVBUF per
@@ -718,7 +721,7 @@ func (w *Worker) openRawSocket() (int, error) {
 	if err != nil {
 		return -1, fmt.Errorf("socket: %w", err)
 	}
-	// The ingress is single-worker, so it does NOT need SO_REUSEPORT (which would only matter
+	// Each ingress worker owns its groups, so it does NOT need SO_REUSEPORT (which would only matter
 	// for same-EUID load-balancing). It uses SO_REUSEADDR alone: that is the cross-EUID
 	// bind path, so this socket can co-exist with a co-resident shard-listener (a DIFFERENT
 	// user, which keeps SO_REUSEPORT for its own workers) on a collapsed node; both receive
