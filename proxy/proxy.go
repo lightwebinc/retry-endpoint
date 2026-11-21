@@ -18,8 +18,8 @@
 // (nothing at all with -suppress-miss, so this endpoint waits out its response
 // deadline). A failed multicast retransmit leaves the request unanswered, and
 // so does a failed unicast send when no multicast copy went out; with a
-// multicast copy sent, the upstream still ACKs with the multicast flag (see
-// the server).
+// multicast copy sent, the upstream still ACKs with the multicast flag unless
+// it suppresses ACKs (-suppress-ack) (see the server).
 //
 // Proxied NACKs carry FlagProxied so an upstream endpoint never re-proxies
 // them, bounding any chain to a single hop.
