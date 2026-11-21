@@ -110,7 +110,7 @@ func New(
 		retransmit:   retransmit,
 		workers:      workers,
 		debug:        debug,
-		retransmitMC: true, // preserve default behaviour until SetRetransmitModes is called
+		retransmitMC: true, // preserve default behavior until SetRetransmitModes is called
 		log:          slog.Default().With("component", "server"),
 	}
 }

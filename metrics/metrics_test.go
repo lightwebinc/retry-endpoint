@@ -51,6 +51,7 @@ func TestAllCountersSafeToCall(t *testing.T) {
 	r.NACKRequest()
 	r.Retransmit()
 	r.RetransmitDedup()
+	r.DedupError("retransmit")
 	r.ResponseSent("ack")
 	r.ResponseSent("miss")
 	r.ResponseSendError("ack")
@@ -208,6 +209,35 @@ func TestSetOwnSource_UnsetIsNoop(t *testing.T) {
 		if _, ok := findSeries(t, r, "bre_own_source_info", "source"); ok {
 			t.Fatalf("SetOwnSource(%q) exported a series; want none", in)
 		}
+	}
+}
+
+// A failed dedup claim is exported per claim, so a dead backend shows on the
+// path it hit, apart from the drops real claims cause.
+func TestDedupErrorByClaim(t *testing.T) {
+	r := newRecorder(t)
+	r.DedupError("retransmit")
+	r.DedupError("retransmit")
+	r.DedupError("proxy")
+	mfs, err := r.promReg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, mf := range mfs {
+		if mf.GetName() != "bre_dedup_errors_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "claim" {
+					got[lp.GetValue()] = m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	if got["retransmit"] != 2 || got["proxy"] != 1 || len(got) != 2 {
+		t.Errorf("bre_dedup_errors_total by claim = %v, want retransmit=2, proxy=1", got)
 	}
 }
 

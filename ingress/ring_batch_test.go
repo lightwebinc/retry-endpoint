@@ -17,7 +17,7 @@ import (
 	"github.com/lightwebinc/retry-endpoint/cache"
 )
 
-// TestRunTeeRing_Runs feeds the ring the way a proxy that builds an object's
+// TestRunTeeRing_Runs feeds the ring the way a producer that builds an object's
 // fragments in ring space does: one record holding a run of equal-size frames
 // and a shorter last one, between ordinary single-frame records, across many
 // wraps of the ring. Every frame is retrievable under its key with the bytes
@@ -72,7 +72,7 @@ func TestRunTeeRing_ArenaLaps(t *testing.T) {
 	}
 }
 
-// ringRuns feeds a ring the way a proxy does and checks what the cache
+// ringRuns feeds a ring the way such a producer does and checks what the cache
 // holds: every frame when all, else that no frame is stored wrong and that
 // a last frame, written after settle returns, is stored.
 func ringRuns(t *testing.T, b scache.Backend, all bool, settle func()) {

@@ -36,22 +36,6 @@ import (
 	"github.com/lightwebinc/retry-endpoint/server"
 )
 
-// buildSSMGroupSources resolves the per-control-group bootstrap source
-// lists into an ingress.GroupSources map keyed by the group's IPv6 (S,G)
-// receiver-side join target. Resolvers run for the lifetime of ctx; the
-// initial resolution is synchronous and fail-closed (Start returns an
-// error if any configured list resolves to zero addresses).
-//
-// Mapping (BRC-129 indices):
-//
-//	GroupBeacon            (0xFFFD) → SSMBootstrapBeacon (retry-endpoint pods)
-//	GroupSubtreeDataAnnounce   (0xFFFB) → SSMBootstrapSubtreeAnn
-//	GroupSubtreeGroupAnn   (0xFFFC) → SSMBootstrapSubtreeAnn (same source set)
-//	GroupBlockBroadcast    (0xFFFE) → SSMBootstrapManifest (block-bcast follows manifest emitters)
-//	data-plane shard groups        → SSMPublishersStatic (lab) or manifest
-//	                                  union (production; wired by the
-//	                                  manifest consumer in a later iteration)
-//
 // excludeOwnSource drops the node's own source address from a roster before
 // it feeds (S,G) joins. A node must never join its own source on the PIM
 // interface: the MLD state installs an iif==oif mroute on a collapsed edge
@@ -72,6 +56,30 @@ func excludeOwnSource(srcs []netip.Addr, own netip.Addr) []netip.Addr {
 	return out
 }
 
+// buildSSMGroupSources resolves the SSM source lists into an
+// ingress.GroupSources map keyed by the group's IPv6 (S,G) receiver-side
+// join target. Resolvers run for the lifetime of ctx; the initial resolution
+// is synchronous and fail-closed (Start returns an error if any configured
+// list resolves to zero addresses).
+//
+// Mapping (BRC-129 indices):
+//
+//	GroupBeacon              (0xFFFD) → SSMBootstrapBeacon (retry-endpoint pods)
+//	GroupSubtreeDataAnnounce (0xFFFB) → SSMBootstrapSubtreeAnn
+//	GroupSubtreeGroupAnn     (0xFFFC) → SSMBootstrapSubtreeAnn (same source set)
+//	GroupBlockBroadcast      (0xFFFE) → publisher sources
+//	data-plane shard groups           → publisher sources
+//	BRC-148 BEEF plane band           → publisher sources
+//
+// The publisher sources are SSMPublishersStatic (lab) or the manifest union
+// (production; wired by the manifest consumer in a later iteration).
+//
+// The block-broadcast group takes the publisher sources because its coinbase
+// and block-announce frames leave from the emitting proxy (BRC-133), whose
+// address is a data-plane publisher source (BRC-129), not a manifest
+// emitter. SSMBootstrapManifest therefore feeds no join: this endpoint
+// neither joins the manifest group nor reads manifests, and the list is only
+// resolved, so a bad entry still fails startup.
 func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.GroupSources, error) {
 	gs := make(ingress.GroupSources)
 
@@ -114,14 +122,15 @@ func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.Grou
 	if err := resolve(cfg.SSMBootstrapSubtreeAnn, gs, subAnnIP, subGrpAnnIP); err != nil {
 		return nil, fmt.Errorf("subtree-announce: %w", err)
 	}
-	// Manifest emitters drive block-broadcast too.
-	blockBcastIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupBlockBroadcast)
-	if err := resolve(cfg.SSMBootstrapManifest, gs, blockBcastIP); err != nil {
+	// Resolved for its fail-closed check only: no group this endpoint joins
+	// is sourced by the manifest emitters.
+	if err := resolve(cfg.SSMBootstrapManifest, gs); err != nil {
 		return nil, fmt.Errorf("manifest: %w", err)
 	}
 
-	// Data-plane: static publisher list (lab/CI). Production manifest-
-	// driven discovery wires the same map after parsing each manifest.
+	// Data-plane publisher sources: static publisher list (lab/CI).
+	// Production manifest-driven discovery wires the same groups, block-
+	// broadcast included, after parsing each manifest.
 	if len(cfg.SSMPublishersStatic) > 0 {
 		r := &bootstrap.Resolver{
 			Entries: cfg.SSMPublishersStatic,
@@ -141,6 +150,12 @@ func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.Grou
 			if !ok {
 				continue
 			}
+			gs[ga] = srcs
+		}
+		// Block-broadcast frames come from the same proxies (BRC-133), so
+		// the group is joined against the same roster.
+		blockBcastIP := shard.GroupAddr(cfg.MCPrefix, cfg.MCGroupID, shard.GroupBlockBroadcast)
+		if ga, ok := netip.AddrFromSlice(blockBcastIP.To16()); ok {
 			gs[ga] = srcs
 		}
 		// BRC-148 plane band groups inherit the same announced roster

@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/lightwebinc/shard-common/frame"
+	"github.com/lightwebinc/shard-common/logging"
 
 	"github.com/lightwebinc/retry-endpoint/metrics"
 	"github.com/lightwebinc/retry-endpoint/retransmit"
@@ -130,9 +131,10 @@ type job struct {
 
 // Client recovers missed frames from upstream retry-endpoints.
 type Client struct {
-	cfg   Config
-	log   *slog.Logger
-	queue chan job
+	cfg         Config
+	log         *slog.Logger
+	queue       chan job
+	dedupErrLog *logging.Throttle
 }
 
 // New constructs a Client. Cache and Retrans must be non-nil; Upstreams must
@@ -154,9 +156,10 @@ func New(cfg Config) *Client {
 		cfg.DedupWindow = 60 * time.Second
 	}
 	return &Client{
-		cfg:   cfg,
-		log:   slog.Default().With("component", "proxy"),
-		queue: make(chan job, cfg.QueueDepth),
+		cfg:         cfg,
+		log:         slog.Default().With("component", "proxy"),
+		queue:       make(chan job, cfg.QueueDepth),
+		dedupErrLog: logging.NewThrottle(retransmit.DedupErrorLogWindow),
 	}
 }
 
@@ -174,7 +177,7 @@ func (c *Client) Enqueue(hashKey, seq uint64, subtree [32]byte, requester *net.U
 	}
 }
 
-// Start launches the worker pool. Workers run until ctx is cancelled.
+// Start launches the worker pool. Workers run until ctx is canceled.
 func (c *Client) Start(ctx context.Context) {
 	var wg sync.WaitGroup
 	for i := 0; i < c.cfg.Workers; i++ {
@@ -213,7 +216,7 @@ func (c *Client) recover(ctx context.Context, j job) {
 		claim := gap[:]
 		// The claim exists so sibling endpoints do not all fetch the SAME gap from
 		// upstream. Whether that is safe depends on how the recovered frame is
-		// DELIVERED, and that changed when recovery started honouring the retransmit
+		// DELIVERED, and that changed when recovery started honoring the retransmit
 		// modes:
 		//
 		//   MULTICAST, one winner's retransmit reaches every requester, so a
@@ -236,10 +239,14 @@ func (c *Client) recover(ctx context.Context, j job) {
 			claim = append(claim, j.requester.IP...)
 			claim = append(claim, byte(j.requester.Port>>8), byte(j.requester.Port))
 		}
-		set, err := c.cfg.Dedup.SetNX(claim, []byte("1"), c.cfg.DedupWindow)
-		if err != nil {
-			c.log.Debug("proxy in-flight SETNX error", "err", err)
-		} else if !set {
+		// A claim the backend cannot answer fails OPEN, as the retransmit
+		// claim does: the gap is recovered without one. The worst case is a
+		// sibling fetching the same gap; failing closed would leave it
+		// unrecovered for as long as the backend is out.
+		switch set, err := c.cfg.Dedup.SetNX(claim, []byte("1"), c.cfg.DedupWindow); {
+		case err != nil:
+			c.dedupError(err)
+		case !set:
 			if c.cfg.Rec != nil {
 				c.cfg.Rec.ProxyInflightDedup()
 			}
@@ -291,6 +298,20 @@ func (c *Client) recover(ctx context.Context, j job) {
 		c.cfg.Rec.ProxyFailed("exhausted")
 	}
 	c.log.Debug("proxy recovery failed", "hash_key", j.hashKey, "seq_num", j.seq)
+}
+
+// dedupError counts an in-flight claim the backend could not answer and logs
+// it, at most once per retransmit.DedupErrorLogWindow with the number of
+// errors not logged since the last line. The caller recovers the gap anyway
+// (fail open).
+func (c *Client) dedupError(err error) {
+	if c.cfg.Rec != nil {
+		c.cfg.Rec.DedupError("proxy")
+	}
+	if emit, suppressed := c.dedupErrLog.Allow("proxy"); emit {
+		c.log.Warn("dedup claim error, recovering without a claim",
+			"err", err, "suppressed", suppressed)
+	}
 }
 
 // fetch sends a proxied NACK to one upstream and waits for the unicast frame

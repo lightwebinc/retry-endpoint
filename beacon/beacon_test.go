@@ -12,7 +12,7 @@ import (
 
 func testConfig() Config {
 	return Config{
-		NACKAddr:   net.ParseIP("fd20::41"),
+		NACKAddr:   net.ParseIP("2001:db8::41"),
 		NACKPort:   9300,
 		Tier:       0,
 		Preference: 128,
@@ -68,7 +68,7 @@ func TestBuildADVERT_nackAddr(t *testing.T) {
 	buf := s.buildADVERT()
 	addr := make(net.IP, 16)
 	copy(addr, buf[8:24])
-	want := net.ParseIP("fd20::41")
+	want := net.ParseIP("2001:db8::41")
 	if !addr.Equal(want) {
 		t.Errorf("NACKAddr = %v, want %v", addr, want)
 	}
