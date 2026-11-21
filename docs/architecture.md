@@ -567,7 +567,7 @@ keys whose state a new key would start in (a sliding window that has aged
 out, a token bucket that has refilled), so no decision changes; keys still in
 use stay, so a map holds about the keys seen in its last window or refill
 period and can pass 100 000 while that many are live. A bucket with a rate of
-`0` never refills; it goes once its source has been quiet for a minute.
+`0` never refills; its source starts over after a quiet minute.
 
 ## Graceful shutdown
 

@@ -168,8 +168,8 @@ func ipKey(ip net.IP) [16]byte {
 const maxBucketKeys = maxWindowKeys
 
 // bucketIdle is how long a key whose bucket cannot refill (a rate of zero or
-// less) stays after its last request; a sweep then drops it, and its next
-// request starts a full bucket.
+// less) must go without a request before its next one starts a full bucket.
+// From then on a sweep may also drop it.
 const bucketIdle = time.Minute
 
 // tokenBucketLimiter admits events per key at rate r with bursts up to burst.
@@ -181,8 +181,9 @@ const bucketIdle = time.Minute
 // does not outlive itself. A sweep drops every bucket that has refilled. A
 // new key's bucket starts full, so dropping a full one changes no decision;
 // it only reclaims a key that an unauthenticated NACK was able to create. A
-// bucket with a non-positive rate never refills: it is dropped once idle for
-// bucketIdle instead. Buckets still refilling stay, so the map holds about
+// bucket with a non-positive rate never refills: once idle for bucketIdle it
+// starts over at its key's next request, and a sweep may drop it instead,
+// with the same result. Buckets still refilling stay, so the map holds about
 // the keys seen in the last refill period (bucketIdle at a non-positive
 // rate). Refusing new keys at a hard cap would instead turn memory pressure
 // into a denial for every new source.
@@ -242,12 +243,18 @@ func (t *tokenBucketLimiter[K]) Allow(key K) bool {
 // allowLocked is Allow at time now. Callers hold t.mu.
 func (t *tokenBucketLimiter[K]) allowLocked(key K, now time.Time) bool {
 	b, ok := t.limit[key]
-	if !ok {
+	switch {
+	case !ok:
 		if len(t.limit) >= t.sweepAt || now.Sub(t.lastSweep) >= t.refill {
 			t.evictLocked(now)
 		}
 		b.lim = rate.NewLimiter(t.r, t.burst)
 		t.peak = max(t.peak, len(t.limit)+1) // with the key about to be added
+	case t.r <= 0 && now.Sub(b.last) >= bucketIdle:
+		// A bucket that cannot refill starts over once idle, as it would
+		// after a sweep dropped it, whether or not another key's arrival
+		// ran one in the meantime.
+		b.lim = rate.NewLimiter(t.r, t.burst)
 	}
 	b.last = now
 	t.limit[key] = b

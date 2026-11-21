@@ -114,6 +114,27 @@ func TestTokenBucketNonRefillingSweptWhenIdle(t *testing.T) {
 	}
 }
 
+// The start-over must not depend on another key's arrival running a sweep: a
+// lone source quiet for bucketIdle starts over at its own next request, and
+// one that keeps asking stays refused.
+func TestTokenBucketNonRefillingStartsOverWithoutSweep(t *testing.T) {
+	tb := newTokenBucketLimiter[int](0, 1, 100)
+	t0 := time.Unix(1_000_000, 0)
+	at := func(d time.Duration) time.Time { return t0.Add(d) }
+
+	if !bucketAllowAt(tb, 1, at(0)) || bucketAllowAt(tb, 1, at(0)) {
+		t.Fatal("want the burst of one, then a refusal")
+	}
+	for _, d := range []time.Duration{50 * time.Second, 100 * time.Second, 150 * time.Second} {
+		if bucketAllowAt(tb, 1, at(d)) {
+			t.Fatalf("a source asking every 50 s was admitted at %v: it is never idle for a minute", d)
+		}
+	}
+	if !bucketAllowAt(tb, 1, at(211*time.Second)) {
+		t.Error("a lone source quiet for a minute was still refused (no other key ran a sweep)")
+	}
+}
+
 func TestRefillTime(t *testing.T) {
 	for _, tc := range []struct {
 		r     rate.Limit
