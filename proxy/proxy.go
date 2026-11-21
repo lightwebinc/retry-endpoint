@@ -5,13 +5,17 @@
 // received the frame directly from the proxy (independent of the bridge that
 // dropped it), re-caches it, and retransmits it per the retransmit modes:
 // multicast into the downstream domain, unicast to the requester, or both
-// (see [Config]). The downstream consumer's gap then fills.
+// (see [Config]). The requester's gap fills when that copy reaches it: a
+// unicast copy does, a multicast one only if the requester is in the domain
+// it is sent into.
 //
 // Recovery is asynchronous ("cache-warm"): the server returns MISS immediately
 // and enqueues a job here; no NACK worker is held. Because the downstream
 // endpoint is not joined to the upstream shard groups, the recovered frame must
-// return by unicast; the upstream serves every proxied NACK a unicast copy,
-// whatever its own retransmit modes (see the server).
+// return by unicast; an upstream cache hit sends a proxied NACK a unicast
+// copy whatever the upstream's own retransmit modes. A miss answers MISS and
+// sends nothing, and a failed multicast retransmit or unicast send leaves the
+// request unanswered (see the server).
 //
 // Proxied NACKs carry FlagProxied so an upstream endpoint never re-proxies
 // them, bounding any chain to a single hop.
