@@ -260,7 +260,8 @@ func run() error {
 	rec.SetOwnSource(cfg.BindSource)
 
 	// Opt-in distributed tracing (no-op unless -trace-sampling > 0 with an OTLP
-	// endpoint). Control-plane only (NACK -> retransmit); not the cache hot path.
+	// endpoint). Spans belong on control-plane flows, never the cache hot path;
+	// this binary starts none.
 	_, traceShutdown, terr := tracing.Init(context.Background(), tracing.Options{
 		Service:      metrics.ServiceName,
 		InstanceID:   cfg.InstanceID,

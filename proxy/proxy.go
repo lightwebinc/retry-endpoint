@@ -3,14 +3,23 @@
 // When a retry-endpoint serving a downstream multicast domain misses a frame
 // in its cache, it recovers the frame from an upstream retry-endpoint that
 // received the frame directly from the proxy (independent of the bridge that
-// dropped it), re-caches it, and multicast-retransmits it into the downstream
-// domain. The downstream consumer's gap then auto-fills.
+// dropped it), re-caches it, and retransmits it per the retransmit modes:
+// multicast into the downstream domain, unicast to the requester, or both
+// (see [Config]). The requester's gap fills only when a copy reaches it: a
+// unicast copy is addressed to the requester, a multicast one reaches it only
+// if the requester is in the domain it is sent into, and either can still be
+// lost on the way.
 //
 // Recovery is asynchronous ("cache-warm"): the server returns MISS immediately
 // and enqueues a job here; no NACK worker is held. Because the downstream
-// proxy is not joined to the upstream shard groups, the recovered frame must
-// return by unicast, the upstream endpoint must run with unicast retransmit
-// enabled (proxied NACKs are always served a unicast copy; see the server).
+// endpoint is not joined to the upstream shard groups, the recovered frame must
+// return by unicast; an upstream cache hit sends a proxied NACK a unicast
+// copy whatever the upstream's own retransmit modes. A miss answers MISS
+// (nothing at all with -suppress-miss, so this endpoint waits out its response
+// deadline). A failed multicast retransmit leaves the request unanswered, and
+// so does a failed unicast send when no multicast copy went out; with a
+// multicast copy sent, the upstream still ACKs with the multicast flag unless
+// it suppresses ACKs (-suppress-ack) (see the server).
 //
 // Proxied NACKs carry FlagProxied so an upstream endpoint never re-proxies
 // them, bounding any chain to a single hop.

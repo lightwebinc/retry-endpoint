@@ -43,12 +43,12 @@ shard-proxy ──multicast──▶ FF05::B:<shard>:9001
 
 ## Dependencies
 
-- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common): `frame`, `shard`, `seqhash`, and the modular `cache` backend (memory / redis / aerospike)
+- [`github.com/lightwebinc/shard-common`](https://github.com/lightwebinc/shard-common): `frame`, `bundle`, `shard`, `netjoin`, `bootstrap`, `teewire`, `teering`, the modular `cache` backend (memory / redis / aerospike), and the shared `logging`, `tracing` and `hostinfo`
 - Prometheus client + OpenTelemetry SDK
 
 ## Requirements
 
-- Go 1.26 or later
+- Go 1.26.2 or later (the `go.mod` minimum)
 - Linux (any modern kernel; `SO_REUSEADDR` cross-EUID co-bind) or FreeBSD
   (`SO_REUSEPORT` co-bind, which requires the co-resident listener to run as
   the **same** uid; FreeBSD has no cross-EUID share)
@@ -84,7 +84,7 @@ make help    # list targets
   -source-mode ssm \
   -bind-source 2001:db8::24 \
   -ssm-bootstrap-manifest shard-manifest-headless.svc.cluster.local \
-  -ssm-publishers-static  2001:db8::a01,2001:db8::a02   # static seed; production derives sources from manifests
+  -ssm-publishers-static  2001:db8::a01,2001:db8::a02   # the data-plane (S,G) source list
 ```
 
 Redis-cache, multi-homed and tier-1 fallback invocations are in

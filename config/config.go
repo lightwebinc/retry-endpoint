@@ -85,8 +85,6 @@ type Config struct {
 	// SourceMode: "asm" (default) | "ssm"
 	// BindSource: optional IPv6 literal for beacon emit; required when
 	//   listeners pre-declare this retry-endpoint in sources.bootstrap.beacon
-	// PublishersManifest: optional URL or local path for static manifest
-	//   source-set bootstrap; defer to operator-supplied static list for now
 	// SSMBootstrap{Beacon,Manifest,SubtreeGroupAnnounce}: per-control-group
 	//   bootstrap source lists (IPv6 literals or DNS names; resolved via
 	//   the shared bootstrap.Resolver at startup and refreshed periodically).
