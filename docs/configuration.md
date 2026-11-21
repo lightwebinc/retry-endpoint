@@ -109,9 +109,12 @@ A file that is not there yet is waited for; a producer that resets the file
 in place is followed; a file replaced by a new one (a proxy restart under
 systemd `DynamicUser`, whose default `RemoveIPC=yes` deletes the unit's
 `/dev/shm` files at every stop: set `RemoveIPC=no` on both units) is noticed
-within a second and re-attached, counted once in
-`bre_frames_dropped_total{reason="ring_replaced"}`; datagrams the consumer
-could not take are `reason="ring_lost"`. May be set beside `-tee-listen`
+once the ring has been empty for a second, and re-attached, counted once in
+`bre_frames_dropped_total{reason="ring_replaced"}`. Datagrams the endpoint
+skipped are `reason="ring_lost"` (a record too long or torn; a producer reset
+counts at most one, whatever it discarded). A datagram the producer could not fit
+into a full ring is counted only in the ring file's header, not by the
+endpoint. May be set beside `-tee-listen`
 (the listener's enveloped tee still needs the socket). Satisfies
 `-mc-join-enabled=false` like `-tee-listen` does.
 
@@ -177,29 +180,37 @@ the source node's cache is the last-resort repairer for that source's frames).
 
 ### `-ssm-bootstrap-manifest` / `SSM_BOOTSTRAP_MANIFEST` (default: `""`)
 
-CSV of shard-manifest source IPs (literals or DNS names). Used for the
-`(S,G)` join of the manifest / block-broadcast group.
+CSV of shard-manifest source IPs (literals or DNS names). Used as the source
+list for the `(S,G)` join of the block-broadcast group (`0xFFFE`); the
+endpoint does not join the manifest group.
 
 ### `-ssm-bootstrap-beacon` / `SSM_BOOTSTRAP_BEACON` (default: `""`)
 
-CSV of retry-endpoint source IPs. Used for the `(S,G)` join of the
-beacon group when this retry-endpoint also consumes beacons (e.g. peer
-discovery in multi-retry deployments).
+CSV of retry-endpoint source IPs for the beacon group. The endpoint sends
+ADVERTs and does not join the beacon group, so the list feeds no join: it is
+resolved at startup (fail-closed) and counts toward the SSM requirement of at
+least one bootstrap list.
 
 ### `-ssm-bootstrap-subtree-announce` / `SSM_BOOTSTRAP_SUBTREE_ANNOUNCE` (default: `""`)
 
-CSV of subtree-announce emitter source IPs for that control group.
+CSV of subtree-announce emitter source IPs. Used as the source list for the
+`(S,G)` join of the subtree-data group (`0xFFFB`), which the endpoint joins
+with `-subtree-data-enabled`.
 
 ### `-ssm-publishers-static` / `SSM_PUBLISHERS_STATIC` (default: `""`)
 
-Lab/CI: pre-declared data-plane publisher source list. Production uses
-manifest-driven discovery. Fail-closed validation rejects > 16 entries
-without a manifest bootstrap.
+Data-plane publisher source list: the `(S,G)` sources joined for every shard
+group and, with `-beef-enabled`, the BEEF plane band. The endpoint does not
+consume shard manifests, so this list is its only source of data-plane
+sources; with it empty those groups are joined any-source
+(`IPV6_JOIN_GROUP`). Fail-closed validation rejects > 16 entries without a
+manifest bootstrap.
 
 ### `-ssm-bootstrap-refresh` / `SSM_BOOTSTRAP_REFRESH` (default: `30s`)
 
 DNS re-resolve interval; last-good set is retained on transient
-refresh failures.
+refresh failures. The joins use the set resolved at startup: a re-resolved
+set takes effect at the next restart.
 
 ---
 
@@ -266,20 +277,25 @@ per-instance while retransmit deduplication becomes cross-instance.
 
 Comma-separated Aerospike seed nodes (`host:port`, default port 3000). Required
 when `-cache-backend=aerospike`. The namespace and set are selected by
-`-aerospike-namespace` (default `cache`) and `-aerospike-set` (default `bre`);
+`-aerospike-namespace` / `AEROSPIKE_NAMESPACE` (default `cache`) and
+`-aerospike-set` / `AEROSPIKE_SET` (default `bre`);
 the namespace must be provisioned on the cluster. Aerospike expiration is in
 whole seconds with a 1s floor; all frame TTLs here satisfy that.
 
 ### `-cache-dial-timeout` / `CACHE_DIAL_TIMEOUT` (default: `1s`) · `-cache-op-timeout` / `CACHE_OP_TIMEOUT` (default: `1s`)
 
-Backend connection and per-operation timeouts. Operations fail open (treated as
-a cache miss) on timeout so a slow backend never blocks NACK handling.
+Backend connection and per-operation timeouts. An ingest store or a NACK
+lookup that times out or fails is counted in `bre_cache_errors_total` and
+abandoned: the frame stays uncached, or the NACK goes unanswered and the
+listener retries on its own timer. A slow backend therefore holds a NACK
+worker for at most the op timeout per operation.
 
 ### `-cache-ttl` / `CACHE_TTL` (default: `60s`)
 
 Global fallback TTL for cached frames. Acts as the default for any
 per-FrameVer TTL that is not set explicitly. If you set `CACHE_TTL=30s`
-and leave the per-type knobs untouched, all frame types collapse to 30s.
+and leave the per-type knobs untouched, the tx, block, subtree and anchor
+TTLs all collapse to 30s (`-cache-ttl-beef` keeps its own value).
 Listeners' `-nack-gap-ttl` should be shorter than the smallest effective
 TTL.
 
@@ -386,19 +402,19 @@ on the first `-egress-iface` is used.
 
 > **Multi-homed hosts:** On a host with both a management NIC and a fabric NIC,
 > the fabric NIC will typically have both a static address (e.g. `2001:db8::24`)
-> and a SLAAC-derived address (e.g. `2001:db8::216:3eff:fe00:1`). If the NACK
-> socket is bound to `[::]`, the kernel may choose the SLAAC address as the
-> source of outgoing ACK/MISS responses. Listeners filtering by the advertised
-> address will then silently drop the responses.
+> and a SLAAC-derived address (e.g. `2001:db8::216:3eff:fe00:1`). Auto-detection
+> takes the first global-unicast address the interface lists, which may be the
+> SLAAC one: the endpoint then binds and advertises that address, and its
+> ACK/MISS responses and unicast retransmits leave from it.
 >
 > Set `-nack-addr` to the static fabric address to prevent this.
 
-**Required in production.** Listeners send NACKs to the advertised address and
-use a connected socket bound to it; with `[::]`, ACK/MISS responses may leave
-from a SLAAC source and are either discarded by the listener (source mismatch)
-or dropped by a firewall allow-list that holds only the advertised address.
-Either path silently breaks NACK recovery. See
-[`shard-listener/nack/nack.go`](https://github.com/lightwebinc/shard-listener/blob/main/nack/nack.go).
+**Required in production.** The NACK socket, the unicast retransmit socket and
+the NACK-proxy fetch socket all bind this one address (never `[::]`). When it
+is not the address the fabric expects, a firewall allow-list that holds only
+the expected address drops the traffic, and a listener's static
+`-retry-endpoints` seed reaches no socket. Either path silently breaks NACK
+recovery.
 
 ### `-suppress-ack` / `SUPPRESS_ACK` (default: `false`)
 
@@ -419,7 +435,7 @@ full response timeout before escalating to the next endpoint.
 
 Comma-separated NIC names for multicast retransmit egress. The first listed
 interface is also used for beacon sending and NACK address auto-detection.
-Multiple interfaces send the same retransmitted frame to each interface in order.
+With several interfaces, each retransmitted frame is sent out every one of them.
 
 ### `-egress-port` / `EGRESS_PORT` (default: `9001`)
 
@@ -449,8 +465,9 @@ Set to match or exceed `-cache-ttl` to prevent double-retransmit on cache miss.
 ## NACK Proxying (cross-domain recovery)
 
 When enabled, a local cache miss triggers an asynchronous recovery from an
-upstream retry-endpoint, re-caching the frame and multicast-retransmitting it
-into this endpoint's domain. This closes the "frames the bridging listener never
+upstream retry-endpoint, re-caching the frame and retransmitting it the way
+this endpoint's retransmit modes say (multicast into its domain, unicast to the
+requester, or both). This closes the "frames the bridging listener never
 emitted" hole for a downstream domain. See the architecture doc's
 [NACK proxying](architecture.md#nack-proxying-cross-domain-recovery) section.
 
@@ -497,9 +514,11 @@ Maximum upstream endpoints tried per gap. `0` = all configured upstreams.
 ### `-proxy-dedup-window` / `PROXY_DEDUP_WINDOW` (default: `60s`)
 
 TTL of the in-flight SETNX claim (`bre:proxy:` prefix) that prevents sibling
-downstream endpoints from all proxying the same gap. Effective only with a
-shared cache backend (`redis`/`aerospike`); with `memory` the claim is
-per-process and a startup warning is logged.
+downstream endpoints from all proxying the same gap (with unicast retransmit
+on, the claim is per requester, since a unicast copy serves only the listener
+that asked). Effective only with a shared dedup backend (`-cache-backend
+redis`/`aerospike`, or `-redis-addr` alongside `memory`); without one no claim
+is made, every miss is fetched, and a startup warning is logged.
 
 ### `-proxy-workers` / `PROXY_WORKERS` (default: `4`)
 
@@ -523,7 +542,8 @@ per-group (post-lookup, cache hits only). All four tiers drop silently by
 default. With `-rl-throttle-response` the honest-congestion tiers (SeqNum,
 chain, group) answer with a 16-byte THROTTLED hint instead; the per-IP flood
 tier never answers (reflection guard). The group tier never sends ACK on
-throttle: an ACK would cancel the listener gap with no retransmit dispatched.
+throttle: an ACK would let a listener cancel the gap with no retransmit
+dispatched.
 
 ### `-rl-ip-rate` / `RL_IP_RATE` (default: `100`)
 
@@ -566,8 +586,9 @@ Sliding window duration for the per-`(srcIP, HashKey)` counter.
 
 ### `-rl-sender-rate` / `RL_SENDER_RATE`, `-rl-sender-window` / `RL_SENDER_WINDOW`
 
-Backward-compatible aliases for `-rl-chain-rate` / `-rl-chain-window`. If the
-alias is set and the canonical flag is not, the alias value takes precedence.
+Backward-compatible aliases for `-rl-chain-rate` / `-rl-chain-window`. An
+alias is read only when its canonical flag is `0`; the canonical flags default
+to `500` and `1m`, so set them to `0` for an alias to apply.
 
 ### `-rl-group-rate` / `RL_GROUP_RATE` (default: `200`)
 
@@ -575,7 +596,8 @@ Token replenishment rate for the per-`(srcIP, groupIdx)` retransmit limiter
 (tokens per second). Applied **post-lookup** on cache hits only. When the bucket
 is exhausted the retransmit is suppressed and the request is answered like the
 other honest-congestion tiers: THROTTLED with `-rl-throttle-response`, silence
-otherwise (never ACK: an ACK would cancel the listener gap with nothing sent).
+otherwise (never ACK: an ACK would let a listener cancel the gap with nothing
+sent).
 
 ### `-rl-group-burst` / `RL_GROUP_BURST` (default: `50`)
 
@@ -720,9 +742,9 @@ covers the SSM block before moving off `asm-only`.
 
 ### `-beacon-flags-multicast` / `BEACON_FLAGS_MULTICAST` (default: `true`)
 
-Advertise that this endpoint retransmits via multicast. Listeners use this flag
-to decide whether the endpoint's retransmits will arrive on the multicast fabric
-(and thus be auto-closed by `Tracker.Observe`) or only via unicast.
+Retransmit a cache hit to the frame's multicast group, and advertise that in
+the ADVERT (`MulticastRetransmit`, `0x0010`). A listener that receives the
+retransmitted frame closes its gap through `Tracker.Observe`.
 
 ### `-beacon-flags-unicast` / `BEACON_FLAGS_UNICAST` (default: `false`)
 
@@ -735,9 +757,12 @@ retransmit; both fire for the same NACK when both flags are set.
 **Repair mode: prefer unicast-back generally, not just on a collapsed fabric.**
 Set `BEACON_FLAGS_UNICAST=true` **and** `BEACON_FLAGS_MULTICAST=false` as the
 deployed posture, for two reasons independent of topology: (1) only a
-unicast-flagged ACK makes a repair VERIFIABLE; a bare ACK lets the listener close
-the gap on trust, so a repair lost on the same degraded link is never retried and
-the loss goes unreported; (2) a multicast repair is delivered to every listener in
+unicast repair is VERIFIABLE on the requester's own NACK socket, where a frame
+that does not arrive escalates to the next cache at once; after a bare or
+multicast-flagged ACK the listener can only wait for the copy on the data
+plane, and a copy lost on the same degraded link costs it a failed round
+(BRC-126 also lets a listener close the gap on such an ACK, on trust);
+(2) a multicast repair is delivered to every listener in
 the group, so members that lost nothing are metered for the bytes.
 
 One instance of (1) is a **collapsed PIM-SSM fabric**, where multicast
@@ -750,9 +775,9 @@ is misrouted off the tunnel.
 
 ### `-beacon-flags-draining` / `BEACON_FLAGS_DRAINING` (default: `false`)
 
-Advertise draining status. Listeners that respect this flag will not add or
-retain this endpoint in their registry. Useful for graceful removal from the
-pool without waiting for beacon eviction timeout.
+Advertise draining status. A listener ignores an ADVERT that carries the flag:
+it does not add the endpoint, and an entry it already holds is no longer
+refreshed and expires `3 × beacon-interval` after its last refresh.
 
 ---
 
@@ -786,9 +811,10 @@ HTTP bind address for:
 
 Loopback `host:port` (e.g. `127.0.0.1:6071`) serving `net/http/pprof`
 (`/debug/pprof/profile`, `goroutine`, `heap`, `block`, `mutex`, `trace`) for
-profiling a running endpoint. Loopback only: the handlers expose the
-process's internals, and a value that is not a loopback literal fails
-startup.
+profiling a running endpoint. The `block` and `mutex` profiles stay empty:
+the endpoint does not set their sampling rates. Loopback only: the handlers
+expose the process's internals, and a value that is not a loopback literal
+fails startup.
 
 ### `-instance` / `INSTANCE_ID` (default: hostname)
 
@@ -820,10 +846,10 @@ and SIGHUP. `-debug` is a deprecated alias for `-log-level=debug`.
 ### `-trace-sampling` / `TRACE_SAMPLING` (default: `0`)
 
 Distributed-trace head sampling ratio `0.0`–`1.0`. `0` = no-op tracer (zero
-cost). When `> 0` with an `-otlp-endpoint`, control-plane flows (NACK →
-retransmit) are traced and exported via the collector; the cache hot path is
-never traced. At startup the endpoint emits a one-shot `host.inventory` event
-and a `bre_host_info` gauge.
+cost). When `> 0` with an `-otlp-endpoint`, the shared OTLP trace exporter
+(`shard-common/tracing`) is installed, but the endpoint starts no spans of its
+own, so it exports none. At startup the endpoint emits a one-shot
+`host.inventory` event and a `bre_host_info` gauge.
 
 ---
 
@@ -831,21 +857,21 @@ and a `bre_host_info` gauge.
 
 | Metric                                                           | Description                                                         |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `bre_frames_received_total`                                      | Frames received from multicast fabric                               |
-| `bre_frames_dropped_total{reason}`                               | Frames dropped, by reason (`queue_full`, `truncated`, `decode_error`, `tee_decap_error`) |
+| `bre_frames_received_total`                                      | Frames received and decoded, from the multicast fabric or a tee     |
+| `bre_frames_dropped_total{reason}`                               | Datagrams dropped, by reason (`queue_full`, `truncated`, `decode_error`, `tee_decap_error`; tee ring: `ring_encap`, `ring_lost`, and `ring_replaced`, one per re-attach) |
 | `bre_frames_cached_total`                                        | Frames successfully written to cache                                |
-| `bre_tee_datagrams_total{form=encap\|raw}`                      | Datagrams accepted on the loopback tee socket, by form              |
+| `bre_tee_datagrams_total{form=encap\|raw}`                      | Datagrams accepted on the tee socket or the tee ring, by form       |
 | `bre_cache_stored_total{source}`                                 | Frames cached, by originating fabric source (see note below)        |
 | `bre_own_source_info{source}`                                    | This node's own source address (always 1); it never joins this one  |
 | `bre_cache_size`                                                 | Current cache size (gauge)                                          |
-| `bre_cache_errors_total`                                         | Cache errors                                                        |
+| `bre_cache_errors_total`                                         | Ingest store and NACK lookup errors; also failed multicast retransmit writes |
 | `bre_nack_requests_total`                                        | NACK requests received                                              |
 | `bre_cache_hits_total`                                           | NACK requests resolved from cache                                   |
 | `bre_cache_misses_total`                                         | NACK requests with no cached frame                                  |
 | `bre_retransmits_total`                                          | Frames sent to multicast egress                                     |
 | `bre_unicast_retransmits_total`                                  | Frames sent unicast back to the NACK requester                      |
-| `bre_responses_sent_total`                                       | ACK/MISS responses successfully written to the NACK socket          |
-| `bre_response_send_errors_total`                                 | ACK/MISS responses that failed to send (`WriteTo` error)            |
+| `bre_responses_sent_total{type=ack\|miss\|throttled}`            | ACK/MISS/THROTTLED responses successfully written to the NACK socket |
+| `bre_response_send_errors_total{type}`                           | ACK/MISS/THROTTLED responses that failed to send (`WriteTo` error)  |
 | `bre_retransmit_dedup_total`                                     | Retransmits skipped by cross-instance dedup (shared dedup backend)  |
 | `bre_rate_limit_drops_total{level=ip\|chain\|sequence\|group}`   | Requests dropped (or retransmit suppressed) by rate limiter tier    |
 | `bre_proxy_requests_total`                                       | Cross-domain proxy recovery jobs started                            |
@@ -865,7 +891,10 @@ apart from "never configured for S".
 The roster it is pre-created from excludes this node's **own** source: joining
 your own source installs an `iif == oif` mroute and every originated frame
 re-enters the forwarding cache until hop-limit death (~60x egress
-amplification). The endpoint therefore cannot cache its own frames at all.
+amplification). With `-bind-source` set, the endpoint therefore never receives
+its own frames by multicast: they reach the cache only through a co-resident
+proxy's tee
+(`-tee-listen` or `-tee-ring`), where they are labeled `::1`.
 
 That exclusion does **not** guarantee the own-source series is absent. Frames
 are labeled on the data path with no roster check, so a single leaked
@@ -940,7 +969,7 @@ retry-endpoint \
 
 ## Helm chart
 
-Most flags documented in this file are exposed under `.config` in the Helm chart's `values.yaml`; the rest (`-tee-listen`, `-mc-join-enabled`, `-control-group-compat`, `-cache-max-bytes`, the `-ingress-*` tuning flags, `-rl-sender-*`) are set through `extraEnv`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
+Most flags documented in this file are exposed under `.config` in the Helm chart's `values.yaml`; the rest (`-tee-listen`, `-tee-ring`, `-mc-join-enabled`, `-control-group-compat`, `-cache-max-bytes`, `-cache-arena-bytes`, the `-ingress-*` tuning flags, `-rl-sender-*`, `-pprof-listen`) are set through `extraEnv`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
 
 Chart: [`charts/retry-endpoint`](https://github.com/lightwebinc/charts/tree/main/charts/retry-endpoint): `config.nackAddr` is effectively required; no Redis subchart bundled.
 

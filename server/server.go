@@ -288,7 +288,7 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		return
 	}
 
-	// Rate limiting: tier 1 (IP) + tier 3 (sequence), pre-lookup.
+	// Rate limiting: tier 1 (IP) + tier 2 (sequence), pre-lookup.
 	var srcIP net.IP
 	if src != nil {
 		srcIP = src.IP
@@ -313,7 +313,7 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 		return
 	}
 
-	// Rate limiting: tier 2 (flow/hashKey), pre-lookup.
+	// Rate limiting: tier 3 (flow/hashKey), pre-lookup.
 	if !s.rateLimiter.AllowChain(srcIP, hashKey) {
 		if s.rec != nil {
 			s.rec.RateLimitDrop(string(ratelimit.LevelChain))
