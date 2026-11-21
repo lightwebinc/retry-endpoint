@@ -214,7 +214,9 @@ emitter and an SSM consumer:
   `-ssm-bootstrap-subtree-announce`. Lists are resolved via
   `shard-common/bootstrap.Resolver` (DNS names or IPv6 literals;
   fail-closed startup) and the joins use the set resolved at startup. A
-  group with no list is joined any-source.
+  group with no list is joined any-source, which PIM-SSM does not route;
+  with `-ssm-publishers-static` empty the endpoint logs a warning at
+  startup.
 - **Addressing** uses `FF35::B:idx` (site SSM) or `FF3E::B:idx`
   (global SSM); `-scope` must be `site` or `global` under SSM.
 

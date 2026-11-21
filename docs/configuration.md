@@ -209,8 +209,9 @@ group, the block-broadcast group (`0xFFFE`, whose frames the proxies emit)
 and, with `-beef-enabled`, the BEEF plane band. The endpoint does not
 consume shard manifests, so this list is its only source of data-plane
 sources; with it empty those groups are joined any-source
-(`IPV6_JOIN_GROUP`). Fail-closed validation rejects > 16 entries without a
-manifest bootstrap.
+(`IPV6_JOIN_GROUP`), which PIM-SSM does not route, and a warning is logged at
+startup (not on a tee-only endpoint, which joins nothing). Fail-closed
+validation rejects > 16 entries without a manifest bootstrap.
 
 ### `-ssm-bootstrap-refresh` / `SSM_BOOTSTRAP_REFRESH` (default: `30s`)
 

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,25 +74,48 @@ func TestBuildSSMGroupSources_BlockBroadcastFollowsPublishers(t *testing.T) {
 }
 
 // With no publisher list the block-broadcast group has no source list, so it
-// is joined any-source exactly like the shard groups; the manifest list still
-// feeds no join.
+// is joined any-source exactly like the shard groups, and that is warned
+// about once at startup (PIM-SSM does not route such a join). The manifest
+// list still feeds no join. A tee-only endpoint joins nothing, so it is not
+// warned.
 func TestBuildSSMGroupSources_NoPublishers(t *testing.T) {
-	cfg := &config.Config{
-		SourceMode:           "ssm",
-		MCPrefix:             0xFF35,
-		MCGroupID:            shard.DefaultGroupID,
-		NumGroups:            4,
-		SSMBootstrapRefresh:  time.Minute,
-		SSMBootstrapManifest: []string{"2001:db8::f01"},
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	for _, tc := range []struct {
+		name  string
+		join  bool
+		warns int
+	}{
+		{"multicast join", true, 1},
+		{"tee only", false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			defer slog.SetDefault(prev)
 
-	gs, err := buildSSMGroupSources(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(gs) != 0 {
-		t.Errorf("group sources = %v, want none (every joined group any-source)", gs)
+			cfg := &config.Config{
+				SourceMode:           "ssm",
+				MCPrefix:             0xFF35,
+				MCGroupID:            shard.DefaultGroupID,
+				NumGroups:            4,
+				MCJoinEnabled:        tc.join,
+				SSMBootstrapRefresh:  time.Minute,
+				SSMBootstrapManifest: []string{"2001:db8::f01"},
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			gs, err := buildSSMGroupSources(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(gs) != 0 {
+				t.Errorf("group sources = %v, want none (every joined group any-source)", gs)
+			}
+			got := strings.Count(logs.String(), "level=WARN")
+			if got != tc.warns || (got > 0 && !strings.Contains(logs.String(), "-ssm-publishers-static")) {
+				t.Errorf("startup warnings = %d, want %d naming -ssm-publishers-static:\n%s", got, tc.warns, logs.String())
+			}
+		})
 	}
 }

@@ -131,6 +131,10 @@ func buildSSMGroupSources(ctx context.Context, cfg *config.Config) (ingress.Grou
 	// Data-plane publisher sources: static publisher list (lab/CI).
 	// Production manifest-driven discovery wires the same groups, block-
 	// broadcast included, after parsing each manifest.
+	if len(cfg.SSMPublishersStatic) == 0 && cfg.MCJoinEnabled {
+		slog.Warn("ssm: no publisher sources; block-broadcast and data-plane groups are joined without a source filter, which PIM-SSM does not route",
+			"flag", "-ssm-publishers-static")
+	}
 	if len(cfg.SSMPublishersStatic) > 0 {
 		r := &bootstrap.Resolver{
 			Entries: cfg.SSMPublishersStatic,
