@@ -82,7 +82,7 @@ type Server struct {
 
 // Retransmitter is the interface for retransmitting cached frames.
 type Retransmitter interface {
-	Retransmit(raw []byte, txID [32]byte) error
+	RetransmitFor(raw []byte, txID [32]byte, requester net.IP) error
 	RetransmitUnicast(raw []byte, dst *net.UDPAddr) error
 }
 
@@ -404,21 +404,26 @@ func (s *Server) processNACK(conn net.PacketConn, workerID int, datagram []byte,
 
 	var ackFlags byte
 	if s.retransmitMC {
-		switch err := s.retransmit.Retransmit(raw, txID); {
+		var requester net.IP
+		if src != nil {
+			requester = src.IP
+		}
+		switch err := s.retransmit.RetransmitFor(raw, txID, requester); {
 		case err == nil:
 			ackFlags |= ackFlagMulticastSent
 			if s.rec != nil {
 				s.rec.Retransmit()
 			}
 		case errors.Is(err, retransmit.ErrDedupSuppressed):
-			// A sibling instance already claimed this (HashKey, SeqNum), so
-			// nothing of ours went on the wire. Leave the multicast flag
-			// clear: flagging it would cancel the requester's gap on trust
-			// for a copy that may have left the wire a full dedup window
-			// ago. The retransmitter counts the drop; we fall through, and
-			// if no unicast copy is sent either the requester simply gets no
-			// ACK and escalates, the honest outcome for a repair this
-			// endpoint did not perform.
+			// The frame's claim is held (a sibling, or an earlier NACK to
+			// this endpoint, sent the copy) and this is the requester's first
+			// NACK for it, so nothing of ours went on the wire. Leave the
+			// multicast flag clear: flagging it would cancel the requester's
+			// gap on trust for a copy that may have left the wire a full
+			// dedup window ago. The retransmitter counts the drop; we fall
+			// through, and if no unicast copy is sent either the requester
+			// gets no ACK and asks again, and that repeat is sent (see
+			// retransmit.RetransmitFor).
 		default:
 			s.log.Error("retransmit error", "err", err)
 			return

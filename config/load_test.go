@@ -295,3 +295,40 @@ func TestLoad_IngressPipeline(t *testing.T) {
 		}
 	}
 }
+
+// The dedup claims get a short timeout of their own and a breaker by default;
+// both are settable by flag or env, the claim timeout must be positive, and a
+// zero breaker window turns the breaker off.
+func TestLoad_DedupClaim(t *testing.T) {
+	c, err := loadWithArgs(t, withEgress(t)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DedupClaimTimeout != 25*time.Millisecond || c.DedupBreakerWindow != 5*time.Second {
+		t.Errorf("defaults: claim timeout %v, breaker window %v; want 25ms, 5s", c.DedupClaimTimeout, c.DedupBreakerWindow)
+	}
+
+	c, err = loadWithArgs(t, withEgress(t, "-dedup-claim-timeout=40ms", "-dedup-breaker-window=0")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DedupClaimTimeout != 40*time.Millisecond || c.DedupBreakerWindow != 0 {
+		t.Errorf("flags: claim timeout %v, breaker window %v; want 40ms, 0", c.DedupClaimTimeout, c.DedupBreakerWindow)
+	}
+
+	t.Setenv("DEDUP_CLAIM_TIMEOUT", "15ms")
+	t.Setenv("DEDUP_BREAKER_WINDOW", "2s")
+	c, err = loadWithArgs(t, withEgress(t)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DedupClaimTimeout != 15*time.Millisecond || c.DedupBreakerWindow != 2*time.Second {
+		t.Errorf("env: claim timeout %v, breaker window %v; want 15ms, 2s", c.DedupClaimTimeout, c.DedupBreakerWindow)
+	}
+
+	for _, bad := range []string{"-dedup-claim-timeout=0", "-dedup-claim-timeout=-1ms", "-dedup-breaker-window=-1s"} {
+		if _, err := loadWithArgs(t, withEgress(t, bad)...); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}

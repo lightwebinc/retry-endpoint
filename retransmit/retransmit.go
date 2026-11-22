@@ -225,35 +225,52 @@ func (r *Retransmitter) targetGroup(raw []byte, txID [32]byte) (*net.UDPAddr, er
 	return r.engine.Addr(groupIdx, r.egressPort), nil
 }
 
-// Retransmit sends a cached frame to the multicast network.
+// Retransmit sends a cached frame to the multicast network for a caller with
+// no requester to name (a proxied recovery re-injected downstream). It is
+// RetransmitFor with a nil requester.
+func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
+	return r.RetransmitFor(raw, txID, nil)
+}
+
+// RetransmitFor sends a cached frame to the multicast network in answer to a
+// NACK from requester (the NACK's source address; nil if unknown).
 //
 // With cross-instance dedup the frame is first claimed by a SET NX on the
-// shared backend, and a claim a sibling already holds suppresses the send
-// (ErrDedupSuppressed). A claim the backend cannot answer (down, timed out,
-// refused) fails OPEN: the frame is sent without one. Dedup exists to save a
-// duplicate copy; failing closed would instead leave the requester's gap
-// unrepaired while this endpoint holds the frame, for as long as the backend
-// is out. The error is counted (bre_dedup_errors_total{claim="retransmit"})
-// and logged at most once per DedupErrorLogWindow. An endpoint whose
-// dedup-only backend (-redis-addr beside the memory cache) is unreachable at
-// startup runs without cross-instance dedup the same way.
-func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
-	// Cross-instance deduplication via backend SETNX.
+// shared backend (HashKey ∥ SeqNum, -dedup-window), and a claim a sibling, or
+// an earlier NACK to this endpoint, already holds suppresses the send
+// (ErrDedupSuppressed): the copy that claim sent serves every listener in the
+// group, so the NACKs of one loss get one repair. That rule covers each
+// requester's FIRST NACK for the frame. A requester that asks again inside the
+// window did not get the copy, so its repeat is sent whatever the claim says:
+// every NACK also sets a mark for its requester (HashKey ∥ SeqNum ∥ source
+// IP, the same window), and a NACK that finds its own mark already set is a
+// repeat (counted in bre_retransmit_repeats_total). The mark is shared like
+// the claim, so a repeat sent to a sibling endpoint, as a listener escalating
+// after an unanswered NACK does, is recognized there too. It keys on the
+// source IP alone because a listener sends each NACK from a fresh port.
+//
+// A claim the backend cannot answer (down, timed out, refused) fails OPEN: the
+// frame is sent without one. Dedup exists to save a duplicate copy; failing
+// closed would instead leave the requester's gap unrepaired while this
+// endpoint holds the frame, for as long as the backend is out. The error is
+// counted (bre_dedup_errors_total{claim="retransmit"}) and logged at most once
+// per DedupErrorLogWindow. An endpoint whose dedup-only backend (-redis-addr
+// beside the memory cache) is unreachable at startup runs without
+// cross-instance dedup the same way.
+//
+// The claim waits at most -dedup-claim-timeout, and after one fails the claim
+// breaker skips claims for -dedup-breaker-window (cache.ErrClaimSkipped,
+// counted in bre_dedup_skipped_total): the frame is then sent at once. A
+// backend that stops answering delays the claims in flight when it fails,
+// then one probe per window, by one claim timeout each.
+func (r *Retransmitter) RetransmitFor(raw []byte, txID [32]byte, requester net.IP) error {
 	if r.dedup != nil {
-		dedupKey := r.buildDedupKey(raw)
-		if len(dedupKey) > 0 {
-			switch set, err := r.dedup.SetNX(dedupKey, []byte("1"), r.dedupWindow); {
-			case err != nil:
-				r.dedupError(err)
-			case !set:
-				// Another instance already retransmitted this frame.
-				if r.rec != nil {
-					r.rec.RetransmitDedup()
-				}
+		if dedupKey := r.buildDedupKey(raw); len(dedupKey) > 0 {
+			if err := r.claim(dedupKey, requester); err != nil {
 				if r.debug {
 					r.log.Debug("retransmit dropped by dedup", "txid", fmt.Sprintf("%x", txID[:8]))
 				}
-				return ErrDedupSuppressed
+				return err
 			}
 		}
 	}
@@ -285,6 +302,56 @@ func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 	}
 
 	return nil
+}
+
+// claim decides whether this NACK's multicast copy goes out: nil to send,
+// ErrDedupSuppressed to hold it. See RetransmitFor for the rules. Every
+// backend failure, and every claim the breaker skips, sends (fail open).
+func (r *Retransmitter) claim(key []byte, requester net.IP) error {
+	if ip := requester.To16(); ip != nil {
+		mark := make([]byte, 0, len(key)+net.IPv6len)
+		mark = append(append(mark, key...), ip...)
+		first, ok := r.claimOK(r.dedup.SetNX(mark, []byte("1"), r.dedupWindow))
+		if !ok {
+			return nil
+		}
+		if !first {
+			// This requester asked for the frame inside the window and asks
+			// again: the copy it was counting on did not arrive.
+			if r.rec != nil {
+				r.rec.RetransmitRepeat()
+			}
+			return nil
+		}
+	}
+	set, ok := r.claimOK(r.dedup.SetNX(key, []byte("1"), r.dedupWindow))
+	if ok && !set {
+		// A sibling, or an earlier NACK for this frame, already sent it.
+		if r.rec != nil {
+			r.rec.RetransmitDedup()
+		}
+		return ErrDedupSuppressed
+	}
+	return nil
+}
+
+// claimOK sorts a SET NX result: ok is false when the backend gave no answer
+// (an error, counted and logged, or a claim the breaker skipped, counted),
+// and the caller then sends without a claim.
+func (r *Retransmitter) claimOK(set bool, err error) (bool, bool) {
+	switch {
+	case errors.Is(err, cache.ErrClaimSkipped):
+		// The backend failed a recent claim. Counted, not logged: that
+		// failure was.
+		if r.rec != nil {
+			r.rec.DedupSkipped("retransmit")
+		}
+		return false, false
+	case err != nil:
+		r.dedupError(err)
+		return false, false
+	}
+	return set, true
 }
 
 // dedupError counts a dedup claim the backend could not answer and logs it,

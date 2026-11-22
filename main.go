@@ -341,35 +341,9 @@ func run() error {
 
 	c := cache.NewStore(frameBackend, "bre:frame:", cfg.CacheOpTimeout)
 
-	// Cross-instance retransmit dedup. A redis/aerospike frame backend is
-	// itself cross-instance, so reuse it under the "bre:dedup:" prefix. With
-	// CACHE_BACKEND=memory (per-instance frames) the dedup gate still needs a
-	// shared store: build a separate redis backend from REDIS_ADDR if given.
-	var dedup cache.Deduper
-	var dedupB scache.Backend // backend used for cross-instance dedup; nil = none
-	switch cfg.CacheBackend {
-	case "redis", "aerospike":
-		dedupB = frameBackend
-		dedup = cache.NewStore(frameBackend, "bre:dedup:", cfg.CacheOpTimeout)
-		slog.Info("cross-instance dedup enabled", "backend", cfg.CacheBackend)
-	case "memory":
-		if cfg.RedisAddr != "" {
-			dedupBackend, derr := scache.Open(context.Background(), scache.Config{
-				Backend:     scache.BackendRedis,
-				RedisAddr:   cfg.RedisAddr,
-				DialTimeout: cfg.CacheDialTimeout,
-				OpTimeout:   cfg.CacheOpTimeout,
-			})
-			if derr != nil {
-				slog.Warn("redis dedup unavailable, running without cross-instance dedup", "addr", cfg.RedisAddr, "err", derr)
-			} else {
-				defer func() { _ = dedupBackend.Close() }()
-				dedupB = dedupBackend
-				dedup = cache.NewStore(dedupBackend, "bre:dedup:", cfg.CacheOpTimeout)
-				slog.Info("cross-instance dedup enabled", "addr", cfg.RedisAddr)
-			}
-		}
-	}
+	// Cross-instance dedup claims (retransmit and NACK proxy); see newDedup.
+	dedup, proxyDedup, closeDedup := newDedup(cfg, frameBackend)
+	defer closeDedup()
 
 	// Build multicast groups for ingress.
 	groups, err := buildGroups(cfg, engine)
@@ -448,10 +422,7 @@ func run() error {
 	// the root context exists, below.
 	var proxyClient *proxy.Client
 	if cfg.ProxyEnabled {
-		var proxyDedup proxy.Deduper
-		if dedupB != nil {
-			proxyDedup = cache.NewStore(dedupB, "bre:proxy:", cfg.CacheOpTimeout)
-		} else {
+		if proxyDedup == nil {
 			slog.Warn("proxy in-flight dedup disabled: no shared cache backend; sibling endpoints may each proxy the same gap (use -cache-backend redis|aerospike)")
 		}
 		proxyClient = proxy.New(proxy.Config{

@@ -38,6 +38,7 @@ import (
 	"github.com/lightwebinc/shard-common/frame"
 	"github.com/lightwebinc/shard-common/logging"
 
+	"github.com/lightwebinc/retry-endpoint/cache"
 	"github.com/lightwebinc/retry-endpoint/metrics"
 	"github.com/lightwebinc/retry-endpoint/retransmit"
 )
@@ -60,9 +61,12 @@ type Cache interface {
 	Store(key, value []byte, ttl time.Duration) error
 }
 
-// Deduper is the cross-instance in-flight-claim surface (subset of cache.Deduper).
+// Deduper is the cross-instance in-flight-claim surface: SetNX makes a claim,
+// Release gives back one this endpoint made (implemented by
+// cache.GuardedDeduper).
 type Deduper interface {
 	SetNX(key, value []byte, ttl time.Duration) (bool, error)
+	Release(key []byte) error
 }
 
 // Retransmitter multicasts a recovered frame into the downstream domain.
@@ -209,11 +213,12 @@ func (c *Client) recover(ctx context.Context, j job) {
 
 	// In-flight claim dedups sibling downstream endpoints when a shared cache
 	// backend is configured. nil deduper (memory backend) => per-process only.
+	var claim []byte // the claim this recovery holds, released if it fails
 	if c.cfg.Dedup != nil {
 		var gap [16]byte
 		binary.BigEndian.PutUint64(gap[0:8], j.hashKey)
 		binary.BigEndian.PutUint64(gap[8:16], j.seq)
-		claim := gap[:]
+		key := gap[:]
 		// The claim exists so sibling endpoints do not all fetch the SAME gap from
 		// upstream. Whether that is safe depends on how the recovered frame is
 		// DELIVERED, and that changed when recovery started honoring the retransmit
@@ -231,19 +236,26 @@ func (c *Client) recover(ctx context.Context, j job) {
 		// reason this claim is in a shared store. Widening the key is the fix that
 		// works across instances.
 		//
-		// Repeat NACKs from the SAME requester inside the window still dedup, which is
-		// what this guard is actually protecting upstream from.
+		// The key is the requester's address and port. A stock listener sends each
+		// NACK from a fresh port, so its repeat NACK (the copy it was sent did not
+		// arrive) makes a claim of its own and is fetched again; the same NACK
+		// delivered twice still dedups.
 		if c.cfg.Unicast && j.requester != nil {
-			claim = make([]byte, 0, len(gap)+len(j.requester.IP)+2)
-			claim = append(claim, gap[:]...)
-			claim = append(claim, j.requester.IP...)
-			claim = append(claim, byte(j.requester.Port>>8), byte(j.requester.Port))
+			key = make([]byte, 0, len(gap)+len(j.requester.IP)+2)
+			key = append(key, gap[:]...)
+			key = append(key, j.requester.IP...)
+			key = append(key, byte(j.requester.Port>>8), byte(j.requester.Port))
 		}
 		// A claim the backend cannot answer fails OPEN, as the retransmit
 		// claim does: the gap is recovered without one. The worst case is a
 		// sibling fetching the same gap; failing closed would leave it
-		// unrecovered for as long as the backend is out.
-		switch set, err := c.cfg.Dedup.SetNX(claim, []byte("1"), c.cfg.DedupWindow); {
+		// unrecovered for as long as the backend is out. A claim the breaker
+		// skipped (a recent claim failed) fails open at once.
+		switch set, err := c.cfg.Dedup.SetNX(key, []byte("1"), c.cfg.DedupWindow); {
+		case errors.Is(err, cache.ErrClaimSkipped):
+			if c.cfg.Rec != nil {
+				c.cfg.Rec.DedupSkipped("proxy")
+			}
 		case err != nil:
 			c.dedupError(err)
 		case !set:
@@ -251,8 +263,25 @@ func (c *Client) recover(ctx context.Context, j job) {
 				c.cfg.Rec.ProxyInflightDedup()
 			}
 			return
+		default:
+			claim = key
 		}
 	}
+	// Give the claim back on every way out but a recovery: held for the window
+	// it would turn every later NACK for the gap into an in-flight dedup, and
+	// the gap could not be recovered for that long even once an upstream has
+	// the frame. That covers a fetch that found the frame nowhere and one cut
+	// short by shutdown. A recovery that succeeded keeps its claim, so
+	// siblings share it.
+	recovered := false
+	defer func() {
+		if claim == nil || recovered {
+			return
+		}
+		if err := c.cfg.Dedup.Release(claim); err != nil && !errors.Is(err, cache.ErrClaimSkipped) {
+			c.log.Debug("proxy in-flight claim release error", "err", err)
+		}
+	}()
 
 	for i := 0; i < c.cfg.MaxEndpoints; i++ {
 		select {
@@ -291,12 +320,14 @@ func (c *Client) recover(ctx context.Context, j job) {
 			c.cfg.Rec.ProxyRecovered()
 		}
 		c.log.Debug("proxy recovered frame", "hash_key", j.hashKey, "seq_num", j.seq, "upstream", c.cfg.Upstreams[i])
+		recovered = true
 		return
 	}
 
 	if c.cfg.Rec != nil {
 		c.cfg.Rec.ProxyFailed("exhausted")
 	}
+	// No upstream had the frame: the deferred release gives the claim back.
 	c.log.Debug("proxy recovery failed", "hash_key", j.hashKey, "seq_num", j.seq)
 }
 

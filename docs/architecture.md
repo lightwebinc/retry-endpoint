@@ -180,14 +180,19 @@ downstream consumer        downstream retry-EP            upstream retry-EP
   claim (`bre:proxy:` prefix, `-proxy-dedup-window` TTL) ensures only one
   downstream endpoint recovers a given gap (one per requester when unicast
   retransmit is on); without one no claim is made and siblings may each proxy
-  (logged at startup). A claim the backend cannot answer fails open like the
+  (logged at startup). A recovery that finds the frame on no upstream releases
+  its claim, so the gap's next NACK fetches again; one that recovers it keeps
+  the claim for the window. A claim the backend cannot answer fails open like the
   retransmit claim: the gap is recovered anyway, and the error is counted in
   `bre_dedup_errors_total{claim="proxy"}` and logged at most once per 30 s.
+  It shares the retransmit claim's client, `-dedup-claim-timeout` and breaker
+  (see [Cross-instance deduplication](#cross-instance-deduplication)).
 - **Scope:** BRC-124/128 tx frames (the bridged hot path). Control-plane frames
   are not bridged onto the downstream domain, so use redundant bridges for them.
 - **Metrics:** `bre_proxy_requests_total`, `bre_proxy_recovered_total`,
   `bre_proxy_failed_total{reason}`, `bre_proxy_inflight_dedup_total`,
-  `bre_proxy_queue_dropped_total`, `bre_dedup_errors_total{claim="proxy"}`.
+  `bre_proxy_queue_dropped_total`, `bre_dedup_errors_total{claim="proxy"}`,
+  `bre_dedup_skipped_total{claim="proxy"}`.
   The endpoint also advertises ADVERT
   `HasParent` (`0x0002`) while proxying is enabled.
 
@@ -386,8 +391,9 @@ datagram a worker:
 4. On **hit**: dispatches `retransmit.Send`, then sends a 16-byte ACK (unless
    `-suppress-ack`) whose Flags record what was dispatched (`0x01` multicast,
    `0x02` unicast). ACK means "retransmit dispatched": when a send was attempted
-   and nothing went on the wire (the multicast copy was dedup-suppressed because
-   a sibling already claimed the frame, or the unicast write failed), the
+   and nothing went on the wire (the multicast copy of a requester's first NACK
+   was dedup-suppressed because a sibling, or an earlier NACK, already sent the
+   frame, or the unicast write failed), the
    corresponding flag stays clear, and with no flag set at all **no ACK is
    sent**, so the requester escalates instead of closing a gap nothing repaired.
    (An endpoint configured with neither send mode still answers a bare ACK: that
@@ -498,6 +504,19 @@ or send no ACK at all if nothing else was dispatched, so the requester never
 closes a gap on the strength of a sibling's copy (see the NACK server hit path
 above).
 
+That rule applies to each requester's **first** NACK for a frame: the NACKs of
+one loss, from any number of listeners to any number of endpoints, get one
+copy. A requester that asks again inside the window did not receive that copy,
+so its repeat is sent whatever the claim says. Every NACK also sets a mark for
+its requester in the same store (`HashKey∥SeqNum∥source IP`, the same window);
+a NACK that finds its own requester's mark already set is a repeat, and is
+counted in `bre_retransmit_repeats_total`. The mark is shared like the claim,
+so a repeat that reaches a sibling, as a listener's next round goes to the
+next endpoint, is recognized there too. It keys on the source address alone
+because a listener sends each NACK from a fresh port. Without it, the claim
+held every repeat for the whole window (60 s by default), past a listener's
+last round, and a frame whose one copy was lost became an unrecoverable gap.
+
 A claim the backend cannot answer (down, timed out, refused) **fails open**:
 the frame is sent without a claim, as if no backend were configured, which is
 also how a `memory` endpoint runs when its `-redis-addr` dedup backend is
@@ -505,6 +524,24 @@ unreachable at startup. A duplicate copy is the cost; failing closed would
 leave every gap unrepaired for as long as the backend is out. Each such error
 is counted in `bre_dedup_errors_total{claim="retransmit"}` and logged at most
 once per 30 s, with the number of errors not logged since the last line.
+
+Failing open must also be fast, because the frame waits for its claim. Both
+claims (this one and the NACK proxy's in-flight claim) therefore:
+
+- run on a backend client of their own, opened with `-dedup-claim-timeout`
+  (25 ms) as its per-operation timeout. The frame store's
+  `-cache-op-timeout` (1 s) would otherwise bound them, and a backend that
+  stops answering without closing its connections makes a claim wait that
+  long, past the point where the listener gives up on the repair;
+- sit behind one claim breaker. The first claim that fails opens it, and for
+  `-dedup-breaker-window` (5 s) claims are skipped (the frame is sent at once,
+  counted in `bre_dedup_skipped_total{claim}`). After the window one claim
+  probes the backend while the others are still skipped; success closes the
+  breaker, failure skips claims for another window.
+
+A dedup backend that dies thus delays the claims in flight at that moment,
+then one probe per window, by one claim timeout each. The breaker logs once
+when claims start failing and once when they are answered again.
 
 ## Beacon discovery (BRC-126)
 
@@ -605,7 +642,7 @@ retry-endpoint/
   main.go          entry point; wires config → cache → ingress → server → beacon
   config/          runtime configuration (flags + env vars + validation)
   ingress/         group-partitioned multicast receive workers + loopback tee and tee ring ingest; writes to cache
-  cache/           Store adapter over the shard-common cache.Backend (memory / redis / aerospike)
+  cache/           Store adapter over the shard-common cache.Backend (memory / redis / aerospike); dedup claim breaker
   server/          UDP NACK receive pool; rate-limit → cache lookup → retransmit
   retransmit/      multicast + unicast retransmit egress; cross-instance dedup
   proxy/           cross-domain NACK proxying: recover misses from upstream, re-cache

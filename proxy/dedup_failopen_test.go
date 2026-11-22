@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lightwebinc/retry-endpoint/cache"
 	"github.com/lightwebinc/retry-endpoint/metrics"
 )
 
@@ -25,6 +26,8 @@ func (d *failingDedup) SetNX(_, _ []byte, _ time.Duration) (bool, error) {
 	d.calls.Add(1)
 	return false, errors.New("dedup backend unreachable")
 }
+
+func (d *failingDedup) Release([]byte) error { return errors.New("dedup backend unreachable") }
 
 // serveMetrics starts rec's HTTP endpoint on a free loopback port and returns
 // its address.
@@ -122,5 +125,59 @@ func TestRecover_DedupBackendErrorFailsOpen(t *testing.T) {
 	}
 	if got := strings.Count(logs.String(), "level=WARN"); got != 1 {
 		t.Errorf("%d warn log lines for 2 failed claims, want 1:\n%s", got, logs.String())
+	}
+}
+
+// skippingDedup is a claim breaker that is open: every claim is skipped
+// without reaching the backend.
+type skippingDedup struct{ calls atomic.Int64 }
+
+func (d *skippingDedup) SetNX(_, _ []byte, _ time.Duration) (bool, error) {
+	d.calls.Add(1)
+	return false, cache.ErrClaimSkipped
+}
+
+func (d *skippingDedup) Release([]byte) error { return cache.ErrClaimSkipped }
+
+// A skipped in-flight claim fails open at once like a failed one, counted as
+// a skip, not an error, and not logged.
+func TestRecover_ClaimSkippedFailsOpen(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(prev)
+
+	rec, err := metrics.New("proxy-test", 1, "", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := serveMetrics(t, rec)
+
+	up := startUpstream(t, "serve", makeFrame(11, 11))
+	defer up.close()
+	frt := &fakeRetrans{}
+	c := newTestClient(Config{
+		Upstreams:   []string{up.addr()},
+		Cache:       newFakeCache(),
+		Retrans:     frt,
+		Multicast:   true,
+		Dedup:       &skippingDedup{},
+		DedupWindow: time.Minute,
+		Rec:         rec,
+	})
+	c.recover(context.Background(), job{hashKey: 11, seq: 11})
+	c.recover(context.Background(), job{hashKey: 11, seq: 11})
+
+	if got := frt.count(); got != 2 {
+		t.Errorf("retransmit count = %d, want 2 (both recoveries run without a claim)", got)
+	}
+	if got := scrape(t, addr, "bre_dedup_skipped_total", `claim="proxy"`); got != 2 {
+		t.Errorf(`bre_dedup_skipped_total{claim="proxy"} = %v, want 2`, got)
+	}
+	if got := scrape(t, addr, "bre_dedup_errors_total", ""); got != 0 {
+		t.Errorf("bre_dedup_errors_total = %v, want 0", got)
+	}
+	if got := strings.Count(logs.String(), "level=WARN"); got != 0 {
+		t.Errorf("%d warn lines for skipped claims, want none:\n%s", got, logs.String())
 	}
 }

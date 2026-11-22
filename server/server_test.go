@@ -52,7 +52,7 @@ type mockRetransmitter struct {
 	unicastLastDst *net.UDPAddr
 }
 
-func (m *mockRetransmitter) Retransmit(raw []byte, _ [32]byte) error {
+func (m *mockRetransmitter) RetransmitFor(raw []byte, _ [32]byte, _ net.IP) error {
 	m.mu.Lock()
 	m.called = true
 	m.lastRaw = append([]byte{}, raw...)

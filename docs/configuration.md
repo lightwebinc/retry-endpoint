@@ -279,7 +279,9 @@ Redis-protocol address (Redis/Valkey/Dragonfly). Behavior depends on `-cache-bac
 When the backend is `redis` (resp. `aerospike`) but `-redis-addr` (resp.
 `-aerospike-hosts`) is empty, startup fails with an explicit error. When
 `CACHE_BACKEND=memory` and `REDIS_ADDR` is set, the frame cache stays
-per-instance while retransmit deduplication becomes cross-instance.
+per-instance while retransmit deduplication becomes cross-instance. In every
+case the dedup claims run on a backend client of their own (see
+[`-dedup-claim-timeout`](#-dedup-claim-timeout--dedup_claim_timeout-default-25ms)).
 
 ### `-aerospike-hosts` / `AEROSPIKE_HOSTS` (default: empty)
 
@@ -296,7 +298,9 @@ Backend connection and per-operation timeouts. An ingest store or a NACK
 lookup that times out or fails is counted in `bre_cache_errors_total` and
 abandoned: the frame stays uncached, or the NACK goes unanswered and the
 listener retries on its own timer. A slow backend therefore holds a NACK
-worker for at most the op timeout per operation.
+worker for at most the op timeout per operation. The dial timeout also
+applies to the dedup claims' own client; the op timeout does not (it is
+`-dedup-claim-timeout` there).
 
 ### `-cache-ttl` / `CACHE_TTL` (default: `60s`)
 
@@ -464,16 +468,49 @@ node with a real fabric NIC.
 Cross-instance retransmission deduplication window. With a shared dedup backend
 (`-cache-backend redis`/`aerospike`, or `-redis-addr` alongside `memory`), the
 first endpoint to serve a NACK claims the frame with a `SET NX` for this
-duration. Other endpoints with the same request skip their send.
+duration. Other endpoints with the same request skip their send. That holds
+for each requester's first NACK for the frame; a requester that asks again
+inside the window did not receive the copy, and its repeat is sent (marked per
+requester source IP in the same store, counted in
+`bre_retransmit_repeats_total`).
 
 A claim the backend cannot answer fails open: the frame is sent without one
 (a sibling may then send it too), the error is counted in
 `bre_dedup_errors_total{claim="retransmit"}`, and it is logged at most once per
 30 s. With `-cache-backend memory`, a `-redis-addr` that is unreachable at
 startup leaves the endpoint without cross-instance dedup the same way (logged
-once).
+once). How long a claim may wait, and how often a failing backend is asked,
+are set by the two flags below.
 
 Set to match or exceed `-cache-ttl` to prevent double-retransmit on cache miss.
+
+### `-dedup-claim-timeout` / `DEDUP_CLAIM_TIMEOUT` (default: `25ms`)
+
+How long a dedup claim, the retransmit claim and the NACK proxy's in-flight
+claim alike, may wait on the backend. The frame waits for its claim, so the
+claims run on a backend client of their own opened with this per-operation
+timeout: the same server as the frame store (`-cache-backend redis` or
+`aerospike`) or the `-redis-addr` dedup store beside `memory`. The frame
+store's `-cache-op-timeout` does not apply to them; on a backend that stops
+answering without closing its connections (a host gone away) a claim would
+wait that long, and so would the repair behind it. A claim not answered in
+time fails open. Size it well above the backend's round trip (a same-site
+Redis answers in well under a millisecond) and well below the listener's
+NACK response timeout. Must be positive. If it is not shorter than
+`-cache-op-timeout`, or a client of their own cannot be opened, the claims
+share the frame client and its timeout (logged at startup).
+
+### `-dedup-breaker-window` / `DEDUP_BREAKER_WINDOW` (default: `5s`)
+
+The claim breaker, shared by both claims. Once a claim fails (an error or a
+timeout), claims are skipped for this long: the backend is not asked, the
+frame goes out at once without a claim, and the skip is counted in
+`bre_dedup_skipped_total{claim}`. When the window has passed, one claim goes
+through as a probe while the others are still skipped; its success closes the
+breaker, its failure skips claims for another window. A dedup backend that
+stays down therefore costs one `-dedup-claim-timeout` per window (after the
+claims already in flight when it failed), not one per repair. The breaker logs once when claims start failing and once when they
+are answered again. `0` turns it off: every claim waits on the backend.
 
 ---
 
@@ -533,10 +570,13 @@ downstream endpoints from all proxying the same gap (with unicast retransmit
 on, the claim is per requester, since a unicast copy serves only the listener
 that asked). Effective only with a shared dedup backend (`-cache-backend
 redis`/`aerospike`, or `-redis-addr` alongside `memory`); without one no claim
-is made, every miss is fetched, and a startup warning is logged. A claim the
+is made, every miss is fetched, and a startup warning is logged. A recovery
+that finds the frame on no upstream releases its claim at once, so the gap's
+next NACK fetches again; a successful one keeps it for this window. A claim the
 backend cannot answer fails open the same way: the gap is fetched, and the
 error is counted in `bre_dedup_errors_total{claim="proxy"}` and logged at most
-once per 30 s.
+once per 30 s. The claim shares the retransmit claim's
+`-dedup-claim-timeout` and breaker (`-dedup-breaker-window`).
 
 ### `-proxy-workers` / `PROXY_WORKERS` (default: `4`)
 
@@ -899,7 +939,9 @@ own, so it exports none. At startup the endpoint emits a one-shot
 | `bre_responses_sent_total{type=ack\|miss\|throttled}`            | ACK/MISS/THROTTLED responses successfully written to the NACK socket |
 | `bre_response_send_errors_total{type}`                           | ACK/MISS/THROTTLED responses that failed to send (`WriteTo` error)  |
 | `bre_retransmit_dedup_total`                                     | Retransmits skipped by cross-instance dedup (shared dedup backend)  |
+| `bre_retransmit_repeats_total`                                   | Multicast retransmits sent for a requester's repeat NACK past the dedup claim (its earlier copy did not arrive) |
 | `bre_dedup_errors_total{claim=retransmit\|proxy}`                | Dedup claims the shared backend could not answer; each failed open (frame sent, gap recovered) |
+| `bre_dedup_skipped_total{claim=retransmit\|proxy}`               | Dedup claims the claim breaker kept from the backend after a failure (`-dedup-breaker-window`); each failed open at once |
 | `bre_rate_limit_drops_total{level=ip\|chain\|sequence\|group}`   | Requests dropped (or retransmit suppressed) by rate limiter tier    |
 | `bre_proxy_requests_total`                                       | Cross-domain proxy recovery jobs started                            |
 | `bre_proxy_recovered_total`                                      | Frames recovered from upstream and re-cached                        |
@@ -996,7 +1038,7 @@ retry-endpoint \
 
 ## Helm chart
 
-Most flags documented in this file are exposed under `.config` in the Helm chart's `values.yaml`; the rest (`-tee-listen`, `-tee-ring`, `-mc-join-enabled`, `-control-group-compat`, `-cache-max-bytes`, `-cache-arena-bytes`, the `-ingress-*` tuning flags, `-rl-sender-*`, `-pprof-listen`) are set through `extraEnv`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
+Most flags documented in this file are exposed under `.config` in the Helm chart's `values.yaml`; the rest (`-tee-listen`, `-tee-ring`, `-mc-join-enabled`, `-control-group-compat`, `-cache-max-bytes`, `-cache-arena-bytes`, the `-ingress-*` tuning flags, `-rl-sender-*`, `-pprof-listen`, `-dedup-claim-timeout`, `-dedup-breaker-window`) are set through `extraEnv`. See the chart repository for installation snippets and the `values.schema.json` for validation rules.
 
 Chart: [`charts/retry-endpoint`](https://github.com/lightwebinc/charts/tree/main/charts/retry-endpoint): `config.nackAddr` is effectively required; no Redis subchart bundled.
 
