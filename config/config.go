@@ -78,20 +78,23 @@ type Config struct {
 	// end-state); it fails closed unless TeeListen or TeeRing is set, because a retry
 	// with neither feed answers every NACK with MISS while looking healthy.
 	TeeListen     netip.AddrPort // zero = disabled
-	TeeRing       string         // shared-memory tee ring file (the proxy's -retry-tee-ring); "" = disabled
+	TeeRing       string         // shared-memory tee ring file (shard-common teering format) written by a co-resident process; "" = disabled
 	MCJoinEnabled bool           // default true
 
 	// SSM (RFC 4607)
 	// SourceMode: "asm" (default) | "ssm"
 	// BindSource: optional IPv6 literal for beacon emit; required when
 	//   listeners pre-declare this retry-endpoint in sources.bootstrap.beacon
-	// SSMBootstrap{Beacon,Manifest,SubtreeGroupAnnounce}: per-control-group
+	// SSMBootstrap{Beacon,Manifest,SubtreeAnn}: per-control-group
 	//   bootstrap source lists (IPv6 literals or DNS names; resolved via
 	//   the shared bootstrap.Resolver at startup and refreshed periodically).
-	//   Used to (S,G)-join the matching control group.
+	//   SubtreeAnn sources the subtree-data join; this endpoint joins
+	//   neither the beacon nor the manifest group.
 	// PublishersStatic: lab/CI escape hatch, pre-declared data-plane
-	//   publisher source list. Production must learn the data-plane source
-	//   set from manifest discovery.
+	//   publisher source list, the (S,G) roster of the shard groups, the
+	//   BEEF plane band and block-broadcast (0xFFFE, emitted by the
+	//   proxies). Production must learn the data-plane source set from
+	//   manifest discovery.
 	SourceMode             string
 	BindSource             string
 	SSMBootstrapManifest   []string
@@ -227,7 +230,7 @@ func Load() (*Config, error) {
 	teeListen := flag.String("tee-listen", envStr("TEE_LISTEN", ""),
 		"loopback host:port (e.g. [::1]:9002) for the tee ingest socket fed by a co-resident proxy/listener -retry-tee; must be a loopback literal; empty = disabled")
 	flag.StringVar(&c.TeeRing, "tee-ring", envStr("TEE_RING", ""),
-		"shared-memory tee ring file written by the co-resident proxy's -retry-tee-ring (a path on /dev/shm): its mirrored datagrams are read from the ring instead of a loopback socket; empty = disabled; may be set beside -tee-listen")
+		"shared-memory tee ring file (a path on /dev/shm) written by any co-resident process in the shard-common teering ring format: its raw frames are read from the ring instead of a loopback socket; empty = disabled; may be set beside -tee-listen")
 	flag.BoolVar(&c.MCJoinEnabled, "mc-join-enabled", envBool("MC_JOIN_ENABLED", true),
 		"join multicast groups and bind the wildcard data port for cache ingest; false = tee-only ingest (requires -tee-listen or -tee-ring; frees the shared data port on a collapsed node)")
 
@@ -335,13 +338,13 @@ func Load() (*Config, error) {
 	flag.StringVar(&c.BindSource, "bind-source", envStr("BIND_SOURCE", ""),
 		"optional IPv6 literal to bind for beacon egress (so SSM listeners can pre-declare this retry-endpoint as a beacon source)")
 	ssmBootstrapManifest := flag.String("ssm-bootstrap-manifest", envStr("SSM_BOOTSTRAP_MANIFEST", ""),
-		"CSV of shard-manifest sources (IPv6 literals or DNS names); used to (S,G)-join the manifest group in Posture C")
+		"CSV of shard-manifest sources (IPv6 literals or DNS names); resolved at startup (fail-closed) but feeds no join: this endpoint does not join the manifest group, and block-broadcast (0xFFFE) takes -ssm-publishers-static")
 	ssmBootstrapBeacon := flag.String("ssm-bootstrap-beacon", envStr("SSM_BOOTSTRAP_BEACON", ""),
-		"CSV of retry-endpoint sources used to (S,G)-join the beacon group (typically a headless-Service name fronting retry-endpoint pods)")
+		"CSV of retry-endpoint sources of the beacon group (typically a headless-Service name fronting retry-endpoint pods); resolved at startup (fail-closed) but feeds no join: this endpoint sends ADVERTs and does not join the beacon group")
 	ssmBootstrapSubtreeAnn := flag.String("ssm-bootstrap-subtree-announce", envStr("SSM_BOOTSTRAP_SUBTREE_ANNOUNCE", ""),
 		"CSV of subtree-announce emitter sources for SSM join of that control group")
 	ssmPublishersStatic := flag.String("ssm-publishers-static", envStr("SSM_PUBLISHERS_STATIC", ""),
-		"lab/CI escape hatch: CSV of data-plane publisher IPv6 sources (production uses manifest discovery)")
+		"lab/CI escape hatch: CSV of data-plane publisher IPv6 sources, the (S,G) roster of the shard groups, the BEEF band and block-broadcast (0xFFFE) (production uses manifest discovery)")
 	flag.DurationVar(&c.SSMBootstrapRefresh, "ssm-bootstrap-refresh", envDuration("SSM_BOOTSTRAP_REFRESH", 30*time.Second),
 		"DNS re-resolve interval for SSM bootstrap entries")
 
@@ -352,7 +355,7 @@ func Load() (*Config, error) {
 	flag.BoolVar(&c.Debug, "debug", envBool("DEBUG", false),
 		"enable per-packet debug logging; deprecated alias for -log-level=debug")
 	flag.StringVar(&c.LogFormat, "log-format", envStr("LOG_FORMAT", "text"),
-		"log output format: text (default, stderr) | json (stdout, for fleet aggregation)")
+		"log output format: text (default, stderr) | json (stdout, for log aggregation)")
 	flag.StringVar(&c.LogLevel, "log-level", envStr("LOG_LEVEL", "info"),
 		"log level: debug|info|warn|error (overridden to debug when -debug is set)")
 	flag.Float64Var(&c.TraceSampling, "trace-sampling", envFloat("TRACE_SAMPLING", 0),

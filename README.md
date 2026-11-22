@@ -15,8 +15,9 @@ on demand to `shard-listener` nodes that detect sequence gaps.
 The cache can also (or instead) be fed by co-resident processes.
 `-tee-listen` accepts the proxy's `-retry-tee` mirror (own-origin frames, raw)
 and the listener's `-retry-tee` mirror (fabric-received frames, source-preserving
-`teewire` envelope) over loopback UDP. `-tee-ring` takes the proxy's
-`-retry-tee-ring` mirror through shared memory instead, with no loopback stack.
+`teewire` envelope) over loopback UDP. `-tee-ring` reads raw frames from a
+shared-memory ring instead, with no loopback stack; any co-resident process can
+write it in the ring format of shard-common's `teering` package.
 With `-mc-join-enabled=false` the endpoint runs tee-only:
 no multicast join and no shared data-port bind at all. See
 [Configuration](docs/configuration.md) for the fail-closed rules.
@@ -84,7 +85,7 @@ make help    # list targets
   -source-mode ssm \
   -bind-source 2001:db8::24 \
   -ssm-bootstrap-manifest shard-manifest-headless.svc.cluster.local \
-  -ssm-publishers-static  2001:db8::a01,2001:db8::a02   # the data-plane (S,G) source list
+  -ssm-publishers-static  2001:db8::a01,2001:db8::a02   # the publisher (S,G) roster: shard groups and block-broadcast
 ```
 
 Redis-cache, multi-homed and tier-1 fallback invocations are in

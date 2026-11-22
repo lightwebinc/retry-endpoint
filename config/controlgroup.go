@@ -23,7 +23,7 @@ import (
 // advertising into FF05::B:FFFD, and a beacon that lands on the wrong group
 // raises no error anywhere, the symptom is silence. This switch exists
 // only to make that transition ordered and observable. It is temporary:
-// once the fleet is on "derived" the flag and this file go away.
+// once every deployment is on "derived" the flag and this file go away.
 //
 // ROLLOUT ORDER, the same note is in shard-listener and shard-manifest:
 //
@@ -46,7 +46,7 @@ import (
 // this flag is a no-op for an ASM deployment.
 const (
 	// ControlGroupASMOnly always derives the any-source FF0x prefix from
-	// the scope table, ignoring -source-mode. Pre-fix behaviour, and the
+	// the scope table, ignoring -source-mode. Pre-fix behavior, and the
 	// default for this sender.
 	ControlGroupASMOnly = "asm-only"
 

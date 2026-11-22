@@ -87,7 +87,7 @@ func TestDifferentSequencesIndependent(t *testing.T) {
 }
 
 // TestSequenceLimiterSlidingWindow guards against regressing to the legacy
-// monotonic-counter behaviour: once a SequenceID's window elapses, new
+// monotonic-counter behavior: once a SequenceID's window elapses, new
 // requests must be admitted again rather than permanently blocked.
 func TestSequenceLimiterSlidingWindow(t *testing.T) {
 	l := New(Config{

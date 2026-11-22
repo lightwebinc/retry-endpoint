@@ -13,11 +13,19 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/lightwebinc/shard-common/frame"
+	"github.com/lightwebinc/shard-common/logging"
 	"github.com/lightwebinc/shard-common/shard"
 
 	"github.com/lightwebinc/retry-endpoint/cache"
 	"github.com/lightwebinc/retry-endpoint/metrics"
 )
+
+// DedupErrorLogWindow is the most often a failing dedup claim is logged: the
+// first error in a window is logged with the number hidden since the last
+// line, the rest only counted (bre_dedup_errors_total). A backend that is
+// down fails every claim, so logging each would put a line per NACK in the
+// log for as long as the outage lasts.
+const DedupErrorLogWindow = 30 * time.Second
 
 // ErrDedupSuppressed reports that a multicast retransmit was NOT put on the
 // wire because a sibling instance already claimed this frame's
@@ -38,6 +46,7 @@ type Retransmitter struct {
 	egressPort  int
 	dedupWindow time.Duration
 	dedup       cache.Deduper // nil = no cross-instance dedup
+	dedupErrLog *logging.Throttle
 	rec         *metrics.Recorder
 	debug       bool
 	log         *slog.Logger
@@ -66,6 +75,7 @@ func New(
 		egressPort:  egressPort,
 		dedupWindow: dedupWindow,
 		dedup:       dedup,
+		dedupErrLog: logging.NewThrottle(DedupErrorLogWindow),
 		rec:         rec,
 		debug:       debug,
 		log:         slog.Default().With("component", "retransmit"),
@@ -216,16 +226,26 @@ func (r *Retransmitter) targetGroup(raw []byte, txID [32]byte) (*net.UDPAddr, er
 }
 
 // Retransmit sends a cached frame to the multicast network.
+//
+// With cross-instance dedup the frame is first claimed by a SET NX on the
+// shared backend, and a claim a sibling already holds suppresses the send
+// (ErrDedupSuppressed). A claim the backend cannot answer (down, timed out,
+// refused) fails OPEN: the frame is sent without one. Dedup exists to save a
+// duplicate copy; failing closed would instead leave the requester's gap
+// unrepaired while this endpoint holds the frame, for as long as the backend
+// is out. The error is counted (bre_dedup_errors_total{claim="retransmit"})
+// and logged at most once per DedupErrorLogWindow. An endpoint whose
+// dedup-only backend (-redis-addr beside the memory cache) is unreachable at
+// startup runs without cross-instance dedup the same way.
 func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 	// Cross-instance deduplication via backend SETNX.
 	if r.dedup != nil {
 		dedupKey := r.buildDedupKey(raw)
 		if len(dedupKey) > 0 {
-			set, err := r.dedup.SetNX(dedupKey, []byte("1"), r.dedupWindow)
-			if err != nil {
-				r.log.Error("dedup SET NX error", "err", err)
-			}
-			if !set {
+			switch set, err := r.dedup.SetNX(dedupKey, []byte("1"), r.dedupWindow); {
+			case err != nil:
+				r.dedupError(err)
+			case !set:
 				// Another instance already retransmitted this frame.
 				if r.rec != nil {
 					r.rec.RetransmitDedup()
@@ -265,6 +285,19 @@ func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 	}
 
 	return nil
+}
+
+// dedupError counts a dedup claim the backend could not answer and logs it,
+// at most once per DedupErrorLogWindow with the number of errors not logged
+// since the last line. The caller sends the frame anyway (fail open).
+func (r *Retransmitter) dedupError(err error) {
+	if r.rec != nil {
+		r.rec.DedupError("retransmit")
+	}
+	if emit, suppressed := r.dedupErrLog.Allow("retransmit"); emit {
+		r.log.Warn("dedup claim error, retransmitting without a claim",
+			"err", err, "suppressed", suppressed)
+	}
 }
 
 // openEgressSocket opens a multicast egress socket on the given interface.

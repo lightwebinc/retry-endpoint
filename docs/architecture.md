@@ -180,12 +180,15 @@ downstream consumer        downstream retry-EP            upstream retry-EP
   claim (`bre:proxy:` prefix, `-proxy-dedup-window` TTL) ensures only one
   downstream endpoint recovers a given gap (one per requester when unicast
   retransmit is on); without one no claim is made and siblings may each proxy
-  (logged at startup).
+  (logged at startup). A claim the backend cannot answer fails open like the
+  retransmit claim: the gap is recovered anyway, and the error is counted in
+  `bre_dedup_errors_total{claim="proxy"}` and logged at most once per 30 s.
 - **Scope:** BRC-124/128 tx frames (the bridged hot path). Control-plane frames
   are not bridged onto the downstream domain, so use redundant bridges for them.
 - **Metrics:** `bre_proxy_requests_total`, `bre_proxy_recovered_total`,
   `bre_proxy_failed_total{reason}`, `bre_proxy_inflight_dedup_total`,
-  `bre_proxy_queue_dropped_total`. The endpoint also advertises ADVERT
+  `bre_proxy_queue_dropped_total`, `bre_dedup_errors_total{claim="proxy"}`.
+  The endpoint also advertises ADVERT
   `HasParent` (`0x0002`) while proxying is enabled.
 
 **Operational note:** all proxied NACKs share the downstream endpoint's source
@@ -204,13 +207,17 @@ emitter and an SSM consumer:
 - **Data-plane ingress** uses the shared `shard-common/netjoin.Join`
   helper, which branches `IPV6_JOIN_GROUP` vs
   `MCAST_JOIN_SOURCE_GROUP` by the per-group source list. The shard
-  groups (and the BEEF plane band) take their list from
-  `-ssm-publishers-static`; the block-broadcast and subtree-data groups
-  take theirs from `-ssm-bootstrap-manifest` and
+  groups, the BEEF plane band and the block-broadcast group take their
+  list from `-ssm-publishers-static`: block-broadcast frames leave from
+  the emitting proxy (BRC-133), a publisher source (BRC-129). The
+  subtree-data group takes its list from
   `-ssm-bootstrap-subtree-announce`. Lists are resolved via
   `shard-common/bootstrap.Resolver` (DNS names or IPv6 literals;
   fail-closed startup) and the joins use the set resolved at startup. A
-  group with no list is joined any-source.
+  group with no list is joined any-source, which PIM-SSM does not route;
+  with no publisher left to join (`-ssm-publishers-static` empty, or
+  listing only this node's own source) the endpoint logs a warning at
+  startup.
 - **Addressing** uses `FF35::B:idx` (site SSM) or `FF3E::B:idx`
   (global SSM); `-scope` must be `site` or `global` under SSM.
 
@@ -491,6 +498,14 @@ or send no ACK at all if nothing else was dispatched, so the requester never
 closes a gap on the strength of a sibling's copy (see the NACK server hit path
 above).
 
+A claim the backend cannot answer (down, timed out, refused) **fails open**:
+the frame is sent without a claim, as if no backend were configured, which is
+also how a `memory` endpoint runs when its `-redis-addr` dedup backend is
+unreachable at startup. A duplicate copy is the cost; failing closed would
+leave every gap unrepaired for as long as the backend is out. Each such error
+is counted in `bre_dedup_errors_total{claim="retransmit"}` and logged at most
+once per 30 s, with the number of errors not logged since the last line.
+
 ## Beacon discovery (BRC-126)
 
 The beacon sender runs as a separate goroutine and fires every `beacon-interval`
@@ -544,6 +559,15 @@ retransmit dispatched.
 
 `HashKey=0` (unstamped frame) bypasses tier 3 to avoid bucketing all
 unattributed gaps from the same source together.
+
+Every tier keys its state by unauthenticated NACK fields, so each tier's map
+is swept once it reaches 100 000 keys (then each time it doubles) and as new
+keys arrive a window or refill period after the last sweep. A sweep drops the
+keys whose state a new key would start in (a sliding window that has aged
+out, a token bucket that has refilled), so no decision changes; keys still in
+use stay, so a map holds about the keys seen in its last window or refill
+period and can pass 100 000 while that many are live. A bucket with a rate of
+`0` never refills; its source starts over after a quiet minute.
 
 ## Graceful shutdown
 

@@ -15,15 +15,14 @@ import (
 	"github.com/lightwebinc/retry-endpoint/cache"
 )
 
-// Shared-memory tee ingest. A co-located proxy whose lanes carry the retry
-// tee through a teering ring (shard-proxy -retry-tee-ring) writes every
-// mirrored datagram into a file on /dev/shm; RunTeeRing attaches to it and
-// feeds the datagrams to the same processors as the tee socket, in the raw
-// form (the proxy mirrors its own egress verbatim), labeled as from
-// loopback like the socket tee's raw datagrams. The loopback UDP tee costs
-// the endpoint a recvmmsg copy per datagram and the kernel the loopback
-// delivery and software GSO segmentation of every GSO message; the ring is
-// one copy into a slot.
+// Shared-memory tee ingest. A co-resident producer, any process that writes
+// the shard-common teering ring format, puts every datagram it mirrors into a
+// file on /dev/shm; RunTeeRing attaches to it and feeds the datagrams to the
+// same processors as the tee socket, in the raw form (frames mirrored
+// verbatim), labeled as from loopback like the socket tee's raw datagrams.
+// The loopback UDP tee costs the endpoint a recvmmsg copy per datagram and
+// the kernel the loopback delivery and software GSO segmentation of every GSO
+// message; the ring is one copy into a slot.
 //
 // Trust: the ring file is written by whoever can open it. It carries raw
 // frames only: a ring datagram in the teewire envelope form (which asserts
@@ -38,7 +37,7 @@ const (
 )
 
 // RunTeeRing drains the ring at path until ctx is canceled. A file that is
-// not there yet (the proxy not started) is waited for; a producer restart
+// not there yet (the producer not started) is waited for; a producer restart
 // (the file reset in place) is followed.
 func (w *Worker) RunTeeRing(ctx context.Context, path string) error {
 	if w.rec != nil {

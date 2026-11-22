@@ -19,7 +19,7 @@ import (
 )
 
 // TestRunTeeRing_RawFramesStored feeds raw frames through a shared-memory
-// ring, as the proxy's -retry-tee-ring does, and expects each stored once,
+// ring, as a co-resident producer does, and expects each stored once,
 // in order, with the ring's loss accounting at zero.
 func TestRunTeeRing_RawFramesStored(t *testing.T) {
 	mc := &mockCache{}

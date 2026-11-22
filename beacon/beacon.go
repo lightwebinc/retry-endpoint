@@ -81,7 +81,7 @@ func (s *Sender) SetRecorder(rec *metrics.Recorder) {
 	s.rec = rec
 }
 
-// Run starts the beacon loop. Blocks until ctx is cancelled.
+// Run starts the beacon loop. Blocks until ctx is canceled.
 func (s *Sender) Run(ctx context.Context) error {
 	// Build the ADVERT payload once (only Draining flag might change).
 	buf := s.buildADVERT()

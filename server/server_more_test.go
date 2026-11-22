@@ -61,8 +61,8 @@ func TestProcessNACK_RangeNACK_DropsRequest(t *testing.T) {
 
 func TestSetBindAddr(t *testing.T) {
 	s := New(9300, newMockCache(), permissiveRL(), nil, nil, 1, false)
-	s.SetBindAddr("fd20::24")
-	if s.bindAddr != "fd20::24" {
+	s.SetBindAddr("2001:db8::24")
+	if s.bindAddr != "2001:db8::24" {
 		t.Errorf("bindAddr = %q", s.bindAddr)
 	}
 }

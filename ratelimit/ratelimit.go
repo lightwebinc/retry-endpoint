@@ -78,10 +78,10 @@ func New(cfg Config) *Limiter {
 		groupBurst = 50
 	}
 	return &Limiter{
-		ipLimiter:       newTokenBucketLimiter[string](cfg.IPRate, cfg.IPBurst),
+		ipLimiter:       newTokenBucketLimiter[string](cfg.IPRate, cfg.IPBurst, maxBucketKeys),
 		chainLimiter:    newSlidingWindowLimiter[chainKey](chainMax, cfg.ChainWindow, maxWindowKeys),
 		sequenceLimiter: newSlidingWindowLimiter[seqKey](cfg.SequenceMax, cfg.SequenceWindow, maxWindowKeys),
-		groupLimiter:    newTokenBucketLimiter[groupKey](groupRate, groupBurst),
+		groupLimiter:    newTokenBucketLimiter[groupKey](groupRate, groupBurst, maxBucketKeys),
 	}
 }
 
@@ -160,30 +160,136 @@ func ipKey(ip net.IP) [16]byte {
 
 // ── token bucket (per comparable key) ─────────────────────────────────────────
 
+// maxBucketKeys is the token-bucket map size at which a new key first sweeps
+// the map, as maxWindowKeys is for the sliding windows. It is reached only
+// under key diversity far above any real source count. Buckets still
+// refilling are kept, so the map can grow past it while that many keys are
+// live, and then sweeps again each time it doubles.
+const maxBucketKeys = maxWindowKeys
+
+// bucketIdle is how long a key whose bucket cannot refill (a rate of zero or
+// less) must go without a request before its next one starts a full bucket.
+// From then on a sweep may also drop it.
+const bucketIdle = time.Minute
+
+// tokenBucketLimiter admits events per key at rate r with bursts up to burst.
+//
+// Its keys come from unauthenticated NACKs (a spoofable source address, and a
+// group index the NACK selects), so like the sliding windows the map is
+// swept: a new key sweeps it once it holds sweepAt keys, and also once a
+// refill period has passed since the last sweep, so a burst of new sources
+// does not outlive itself. A sweep drops every bucket that has refilled. A
+// new key's bucket starts full, so dropping a full one changes no decision;
+// it only reclaims a key that an unauthenticated NACK was able to create. A
+// bucket with a non-positive rate never refills: once idle for bucketIdle it
+// starts over at its key's next request, and a sweep may drop it instead,
+// with the same result. Buckets still refilling stay, so the map holds about
+// the keys seen in the last refill period (bucketIdle at a non-positive
+// rate). Refusing new keys at a hard cap would instead turn memory pressure
+// into a denial for every new source.
 type tokenBucketLimiter[K comparable] struct {
-	mu    sync.Mutex
-	limit map[K]*rate.Limiter
-	r     rate.Limit
-	burst int
+	mu        sync.Mutex
+	limit     map[K]bucket
+	r         rate.Limit
+	burst     int
+	refill    time.Duration // empty to full at r, at most bucketIdle: the sweep period
+	maxKeys   int           // map size at which refilled keys are first swept
+	sweepAt   int           // map size that triggers the next sweep
+	lastSweep time.Time
+	peak      int // largest len(limit) since the map was last rebuilt
 }
 
-func newTokenBucketLimiter[K comparable](tokensPerSec float64, burst int) *tokenBucketLimiter[K] {
+// bucket is one key's limiter and the time of its last request.
+type bucket struct {
+	lim  *rate.Limiter
+	last time.Time
+}
+
+func newTokenBucketLimiter[K comparable](tokensPerSec float64, burst, maxKeys int) *tokenBucketLimiter[K] {
+	r := rate.Limit(tokensPerSec)
 	return &tokenBucketLimiter[K]{
-		limit: make(map[K]*rate.Limiter),
-		r:     rate.Limit(tokensPerSec),
-		burst: burst,
+		limit:   make(map[K]bucket),
+		r:       r,
+		burst:   burst,
+		refill:  refillTime(r, burst),
+		maxKeys: maxKeys,
+		sweepAt: maxKeys,
 	}
+}
+
+// refillTime is how long a bucket of size burst takes to fill from empty at
+// rate r, capped at bucketIdle (also the value when it never refills). The
+// cap keeps a slow rate from spacing sweeps hours apart, and is applied before
+// the conversion, which would overflow for an extreme burst-to-rate ratio.
+func refillTime(r rate.Limit, burst int) time.Duration {
+	if r <= 0 {
+		return bucketIdle
+	}
+	secs := float64(burst) / float64(r)
+	if !(secs < bucketIdle.Seconds()) { // also a NaN rate
+		return bucketIdle
+	}
+	return time.Duration(secs * float64(time.Second))
 }
 
 func (t *tokenBucketLimiter[K]) Allow(key K) bool {
 	t.mu.Lock()
-	l, ok := t.limit[key]
-	if !ok {
-		l = rate.NewLimiter(t.r, t.burst)
-		t.limit[key] = l
+	defer t.mu.Unlock()
+	// The limiter is consulted under the map lock too, so a sweep cannot drop
+	// a bucket between its lookup and its use.
+	return t.allowLocked(key, time.Now())
+}
+
+// allowLocked is Allow at time now. Callers hold t.mu.
+func (t *tokenBucketLimiter[K]) allowLocked(key K, now time.Time) bool {
+	b, ok := t.limit[key]
+	switch {
+	case !ok:
+		if len(t.limit) >= t.sweepAt || now.Sub(t.lastSweep) >= t.refill {
+			t.evictLocked(now)
+		}
+		b.lim = rate.NewLimiter(t.r, t.burst)
+		t.peak = max(t.peak, len(t.limit)+1) // with the key about to be added
+	case t.r <= 0 && now.Sub(b.last) >= bucketIdle:
+		// A bucket that cannot refill starts over once idle, as it would
+		// after a sweep dropped it, whether or not another key's arrival
+		// ran one in the meantime.
+		b.lim = rate.NewLimiter(t.r, t.burst)
 	}
-	t.mu.Unlock()
-	return l.Allow()
+	b.last = now
+	t.limit[key] = b
+	return b.lim.AllowN(now, 1)
+}
+
+// evictLocked drops the keys whose bucket has refilled, and the non-refilling
+// ones idle for bucketIdle. Callers hold t.mu. As in the sliding window, live
+// keys stay, so the map can remain above maxKeys; the next size-triggered
+// sweep then waits until the map has doubled, and a map left sparse is moved
+// to one sized for its live keys.
+func (t *tokenBucketLimiter[K]) evictLocked(now time.Time) {
+	for k, b := range t.limit {
+		if t.idle(b, now) {
+			delete(t.limit, k)
+		}
+	}
+	if n := len(t.limit); 4*n < t.peak {
+		m := make(map[K]bucket, n)
+		for k, b := range t.limit {
+			m[k] = b
+		}
+		t.limit, t.peak = m, n
+	}
+	t.sweepAt = max(t.maxKeys, 2*len(t.limit))
+	t.lastSweep = now
+}
+
+// idle reports whether b can be dropped at now: its bucket is full again, as
+// a new key's is, or it cannot refill and has gone bucketIdle unused.
+func (t *tokenBucketLimiter[K]) idle(b bucket, now time.Time) bool {
+	if b.lim.TokensAt(now) >= float64(t.burst) {
+		return true
+	}
+	return t.r <= 0 && now.Sub(b.last) >= bucketIdle
 }
 
 // ── sliding window (per comparable key) ───────────────────────────────────────

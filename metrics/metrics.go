@@ -59,6 +59,7 @@ type Recorder struct {
 	retransmits        metric.Int64Counter
 	unicastRetransmits metric.Int64Counter
 	retransmitDedup    metric.Int64Counter
+	dedupErrors        metric.Int64Counter // labeled claim={retransmit,proxy}
 	responsesSent      metric.Int64Counter // labeled type={ack,miss}
 	responseSendErrors metric.Int64Counter
 
@@ -191,6 +192,10 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		metric.WithDescription("Retransmissions dropped due to deduplication")); err != nil {
 		return nil, err
 	}
+	if r.dedupErrors, err = meter.Int64Counter("bre_dedup_errors_total",
+		metric.WithDescription("Cross-instance dedup claims (SET NX) the shared backend could not answer, by claim: retransmit = the multicast retransmit claim, proxy = the NACK proxy's in-flight claim. Each one fails open: the frame is sent, or the gap recovered, without a claim")); err != nil {
+		return nil, err
+	}
 	if r.proxyRequests, err = meter.Int64Counter("bre_proxy_requests_total",
 		metric.WithDescription("Cross-domain NACK proxy recovery jobs started")); err != nil {
 		return nil, err
@@ -283,6 +288,15 @@ func (r *Recorder) UnicastRetransmit() {
 
 func (r *Recorder) RetransmitDedup() {
 	r.retransmitDedup.Add(context.Background(), 1)
+}
+
+// DedupError records a cross-instance dedup claim the shared backend could not
+// answer. claim is "retransmit" (the multicast retransmit claim) or "proxy"
+// (the NACK proxy's in-flight claim); both fail open.
+func (r *Recorder) DedupError(claim string) {
+	r.dedupErrors.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("claim", claim),
+	))
 }
 
 // ProxyRequest records a cross-domain proxy recovery job start.
@@ -391,7 +405,7 @@ func (r *Recorder) sourceOption(source string) metric.MeasurementOption {
 //
 // That is NOT the same as the pair being absent: [Recorder.FrameCached]
 // creates a series on the data path with no roster check, so one leaked
-// own-source frame materialises the pair at a count that then never moves --
+// own-source frame materializes the pair at a count that then never moves --
 // indistinguishable, by rate alone, from real starvation. The ingress socket
 // disables IPV6_MULTICAST_ALL to close the leak path that produced this, and
 // [Recorder.SetOwnSource] publishes the address so the alert can subtract

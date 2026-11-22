@@ -192,7 +192,7 @@ func TestValidateNACK_parsesHashKeyAndStartSeq(t *testing.T) {
 	}
 }
 
-// ── processNACK behavioural tests ─────────────────────────────────────────────
+// ── processNACK behavioral tests ─────────────────────────────────────────────
 
 func TestProcessNACK_CacheHit_RetransmitsAndACKs(t *testing.T) {
 	mc := newMockCache()

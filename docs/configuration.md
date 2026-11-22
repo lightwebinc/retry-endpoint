@@ -91,22 +91,23 @@ Accepted datagrams are counted in `bre_tee_datagrams_total{form="encap"|"raw"}`.
 
 ### `-tee-ring` / `TEE_RING` (default: empty = disabled)
 
-Path of a **shared-memory tee ring** (`shard-common/teering`, a file on
-`/dev/shm`) written by the co-resident proxy's `-retry-tee-ring`. The
-proxy's lanes mirror their egress into the ring instead of the loopback
-socket, and the endpoint copies each datagram out of it and processes it as a raw tee datagram (counted in
-`bre_tee_datagrams_total{form="raw"}`, labeled `::1` like the socket tee's
-raw form). The ring removes the loopback UDP stack from the tee, which
-lowers the CPU cost of the mirror in both the proxy and the endpoint. With
-the in-memory cache a datagram is copied once, out of the ring into memory
-the cache then keeps (no second copy by the cache). Other cache backends
-take the datagram through a receive slot and copy it themselves. The ring
+Path of a **shared-memory tee ring** (a file on `/dev/shm`) written by a
+co-resident producer: any process that writes the ring format defined in
+shard-common's `teering` package, for example to mirror the frames it sends.
+The endpoint copies each datagram out of the ring and processes it as a raw
+tee datagram (counted in `bre_tee_datagrams_total{form="raw"}`, labeled `::1`
+like the socket tee's raw form). The ring takes the loopback UDP stack off
+the tee path, which lowers the CPU cost of the mirror for both the producer
+and the endpoint. With the in-memory cache a datagram is copied once, out of
+the ring into memory the cache then keeps (no second copy by the cache).
+Other cache backends take the datagram through a receive slot and copy it
+themselves. The ring
 carries raw frames only: a ring datagram in the `teewire` envelope form is
 dropped and counted as `bre_frames_dropped_total{reason="ring_encap"}`, so
 a ring writer cannot assert a frame source.
 
 A file that is not there yet is waited for; a producer that resets the file
-in place is followed; a file replaced by a new one (a proxy restart under
+in place is followed; a file replaced by a new one (a producer restart under
 systemd `DynamicUser`, whose default `RemoveIPC=yes` deletes the unit's
 `/dev/shm` files at every stop: set `RemoveIPC=no` on both units) is noticed
 once the ring has been empty for a second, and re-attached, counted once in
@@ -180,9 +181,13 @@ the source node's cache is the last-resort repairer for that source's frames).
 
 ### `-ssm-bootstrap-manifest` / `SSM_BOOTSTRAP_MANIFEST` (default: `""`)
 
-CSV of shard-manifest source IPs (literals or DNS names). Used as the source
-list for the `(S,G)` join of the block-broadcast group (`0xFFFE`); the
-endpoint does not join the manifest group.
+CSV of shard-manifest source IPs (literals or DNS names). The endpoint
+neither joins the manifest group nor reads manifests, so the list feeds no
+join: it is resolved at startup (fail-closed) and counts toward the SSM
+requirement of at least one bootstrap list. The block-broadcast group
+(`0xFFFE`) is not joined against it: coinbase and block-announce frames
+leave from the emitting proxy (BRC-133), so that group takes the publisher
+sources (`-ssm-publishers-static`).
 
 ### `-ssm-bootstrap-beacon` / `SSM_BOOTSTRAP_BEACON` (default: `""`)
 
@@ -200,11 +205,14 @@ with `-subtree-data-enabled`.
 ### `-ssm-publishers-static` / `SSM_PUBLISHERS_STATIC` (default: `""`)
 
 Data-plane publisher source list: the `(S,G)` sources joined for every shard
-group and, with `-beef-enabled`, the BEEF plane band. The endpoint does not
+group, the block-broadcast group (`0xFFFE`, whose frames the proxies emit)
+and, with `-beef-enabled`, the BEEF plane band. The endpoint does not
 consume shard manifests, so this list is its only source of data-plane
-sources; with it empty those groups are joined any-source
-(`IPV6_JOIN_GROUP`). Fail-closed validation rejects > 16 entries without a
-manifest bootstrap.
+sources. With it empty, or listing only this node's own source (which
+`-bind-source` keeps out of every join), those groups are joined any-source
+(`IPV6_JOIN_GROUP`), which PIM-SSM does not route, and a warning is logged at
+startup (not on a tee-only endpoint, which joins nothing). Fail-closed
+validation rejects > 16 entries without a manifest bootstrap.
 
 ### `-ssm-bootstrap-refresh` / `SSM_BOOTSTRAP_REFRESH` (default: `30s`)
 
@@ -458,6 +466,13 @@ Cross-instance retransmission deduplication window. With a shared dedup backend
 first endpoint to serve a NACK claims the frame with a `SET NX` for this
 duration. Other endpoints with the same request skip their send.
 
+A claim the backend cannot answer fails open: the frame is sent without one
+(a sibling may then send it too), the error is counted in
+`bre_dedup_errors_total{claim="retransmit"}`, and it is logged at most once per
+30 s. With `-cache-backend memory`, a `-redis-addr` that is unreachable at
+startup leaves the endpoint without cross-instance dedup the same way (logged
+once).
+
 Set to match or exceed `-cache-ttl` to prevent double-retransmit on cache miss.
 
 ---
@@ -518,7 +533,10 @@ downstream endpoints from all proxying the same gap (with unicast retransmit
 on, the claim is per requester, since a unicast copy serves only the listener
 that asked). Effective only with a shared dedup backend (`-cache-backend
 redis`/`aerospike`, or `-redis-addr` alongside `memory`); without one no claim
-is made, every miss is fetched, and a startup warning is logged.
+is made, every miss is fetched, and a startup warning is logged. A claim the
+backend cannot answer fails open the same way: the gap is fetched, and the
+error is counted in `bre_dedup_errors_total{claim="proxy"}` and logged at most
+once per 30 s.
 
 ### `-proxy-workers` / `PROXY_WORKERS` (default: `4`)
 
@@ -548,11 +566,18 @@ dispatched.
 ### `-rl-ip-rate` / `RL_IP_RATE` (default: `100`)
 
 Token replenishment rate for the per-source-IP token bucket (tokens per second).
+With `0` a bucket never refills: a source gets its burst, then nothing until it
+has sent no NACK for a minute.
 
 ### `-rl-ip-burst` / `RL_IP_BURST` (default: `10`)
 
 Burst size for the per-source-IP token bucket. Allows short bursts above the
-sustained rate before limiting kicks in.
+sustained rate before limiting kicks in. The bucket map is swept of buckets
+that have refilled, which decide exactly as a new one would: when it reaches
+100 000 sources (then each time it doubles), and when a new source arrives a
+refill period (`burst / rate`, at most a minute) after the last sweep.
+Buckets still refilling stay, so the map holds about the sources seen in the
+last refill period, and a burst of new sources does not outlive itself.
 
 ### `-rl-sequence-max` / `RL_SEQUENCE_MAX` (default: `100`)
 
@@ -603,7 +628,8 @@ sent).
 
 Burst size for the per-`(srcIP, groupIdx)` token bucket. `groupIdx` is derived
 from the frame TxID using the same `shard.Engine` as the multicast egress path
-(`-shard-bits` must match).
+(`-shard-bits` must match). Its bucket map is swept like the IP tier's (from
+100 000 pairs on; refilled buckets go).
 
 ### `-rl-throttle-response` / `RL_THROTTLE_RESPONSE` (default: `false`)
 
@@ -638,8 +664,8 @@ AS as the ingress proxy) and higher values for remotely reached fallbacks. Valid
 range is `0`–`254`: `0xFF` is RESERVED as the static-seed sentinel and is
 rejected at config load.
 
-**Set this deliberately.** Leaving every endpoint at the default `0` makes the
-whole fleet claim source-adjacency, so `(Tier, Preference)` ties everywhere and,
+**Set this deliberately.** Leaving every endpoint at the default `0` makes them
+all claim source-adjacency, so `(Tier, Preference)` ties everywhere and,
 because the listener's registry sort is not stable, the escalation ORDER becomes
 arbitrary and unrepeatable between runs, which also invalidates before/after
 recovery comparisons.
@@ -730,7 +756,7 @@ safe on its own: the binary changes, the wire does not.
 
 Setting this endpoint to `derived` before step 1 has covered every listener
 is the one ordering that silently strands a peer. `both` is the escape hatch
-for a fleet that is knowingly mixed and does not want a second converge.
+for a deployment that is knowingly mixed and does not want a second converge.
 
 Under `-source-mode ssm` a fabric's multicast routes and PIM/smcroute group
 ranges are usually derived from the source mode too, and so cover
@@ -834,7 +860,7 @@ Metric export interval for the OTLP push exporter. Ignored when
 ### `-log-format` / `LOG_FORMAT` (default: `text`)
 
 Structured-log output: `text` (stderr, dev default) or `json` (one JSON object
-per line on stdout, for fleet aggregation). Every line carries the
+per line on stdout, for log aggregation). Every line carries the
 `service.{name,instance.id,version}` identity triple shared with OTLP metrics.
 See the [Unified Component Logging](https://github.com/lightwebinc/shard-common/blob/main/docs/logging.md).
 
@@ -873,6 +899,7 @@ own, so it exports none. At startup the endpoint emits a one-shot
 | `bre_responses_sent_total{type=ack\|miss\|throttled}`            | ACK/MISS/THROTTLED responses successfully written to the NACK socket |
 | `bre_response_send_errors_total{type}`                           | ACK/MISS/THROTTLED responses that failed to send (`WriteTo` error)  |
 | `bre_retransmit_dedup_total`                                     | Retransmits skipped by cross-instance dedup (shared dedup backend)  |
+| `bre_dedup_errors_total{claim=retransmit\|proxy}`                | Dedup claims the shared backend could not answer; each failed open (frame sent, gap recovered) |
 | `bre_rate_limit_drops_total{level=ip\|chain\|sequence\|group}`   | Requests dropped (or retransmit suppressed) by rate limiter tier    |
 | `bre_proxy_requests_total`                                       | Cross-domain proxy recovery jobs started                            |
 | `bre_proxy_recovered_total`                                      | Frames recovered from upstream and re-cached                        |
@@ -893,8 +920,8 @@ your own source installs an `iif == oif` mroute and every originated frame
 re-enters the forwarding cache until hop-limit death (~60x egress
 amplification). With `-bind-source` set, the endpoint therefore never receives
 its own frames by multicast: they reach the cache only through a co-resident
-proxy's tee
-(`-tee-listen` or `-tee-ring`), where they are labeled `::1`.
+tee (the proxy's `-retry-tee` into `-tee-listen`, or a tee ring producer into
+`-tee-ring`), where they are labeled `::1`.
 
 That exclusion does **not** guarantee the own-source series is absent. Frames
 are labeled on the data path with no roster check, so a single leaked
