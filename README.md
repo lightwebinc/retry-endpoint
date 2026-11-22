@@ -97,7 +97,8 @@ Set `-nack-addr` / `NACK_ADDR` to the advertised fabric address; see [Configurat
 ## Container image
 
 The Dockerfile produces a `gcr.io/distroless/static:nonroot` image with a
-single static binary at `/usr/local/bin/retry-endpoint`. No in-image
+single static binary at `/usr/local/bin/retry-endpoint`, and `LICENSE`,
+`NOTICE` and `LICENSE-THIRD-PARTY` in `/usr/share/doc/retry-endpoint/`. No in-image
 `ENV` defaults are set; configure via Helm `values.yaml` or container
 environment variables / CLI flags.
 

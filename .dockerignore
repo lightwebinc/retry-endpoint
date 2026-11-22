@@ -5,5 +5,5 @@ build/
 ci/
 docs/
 *.md
-NOTICE
-LICENSE
+# LICENSE, NOTICE and LICENSE-THIRD-PARTY are not ignored: the final stage of
+# the Dockerfile copies them into the image.
