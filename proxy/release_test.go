@@ -98,3 +98,31 @@ func TestRecover_FailedFetchReleasesClaim(t *testing.T) {
 		t.Errorf("upstream asked %d times, want 2: a successful recovery must keep its claim", got)
 	}
 }
+
+// A recovery cut short by shutdown gives its claim back too: kept, it would
+// hold the gap as a sibling's fetch in flight for the whole window.
+func TestRecover_CancelledRecoveryReleasesClaim(t *testing.T) {
+	up := startSwitchUpstream(t, makeFrame(5, 5))
+	up.has.Store(true)
+	c := newTestClient(Config{
+		Upstreams:   []string{up.addr()},
+		Cache:       newFakeCache(),
+		Retrans:     &fakeRetrans{},
+		Multicast:   true,
+		Dedup:       newFakeDedup(),
+		DedupWindow: time.Minute,
+		Timeout:     200 * time.Millisecond,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.recover(ctx, job{hashKey: 5, seq: 5}) // claims, then stops before any fetch
+	if got := up.nacks.Load(); got != 0 {
+		t.Fatalf("a cancelled recovery asked the upstream %d times, want 0", got)
+	}
+
+	c.recover(context.Background(), job{hashKey: 5, seq: 5})
+	if got := up.nacks.Load(); got != 1 {
+		t.Fatalf("upstream asked %d times after the cancelled recovery, want 1: it kept its claim", got)
+	}
+}

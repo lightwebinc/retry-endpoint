@@ -225,8 +225,9 @@ func (d *heldDedup) SetNX(key, _ []byte, _ time.Duration) (bool, error) {
 	return true, nil
 }
 
-// A released claim can be made again; while the breaker is open the release
-// is skipped like a claim, and the claim lapses at its TTL.
+// A released claim can be made again. A release always asks the backend, even
+// while the breaker is open (a skipped release would hold the claim for its
+// whole TTL), and its outcome does not move the breaker.
 func TestGuard_Release(t *testing.T) {
 	var logs bytes.Buffer
 	br, _ := newTestBreaker(time.Second, &logs)
@@ -247,10 +248,19 @@ func TestGuard_Release(t *testing.T) {
 	if _, err := gd.SetNX([]byte("k"), []byte("1"), time.Minute); !errors.Is(err, errDown) {
 		t.Fatalf("claim against a failing backend: %v", err)
 	}
-	if err := gd.Release([]byte("k")); !errors.Is(err, ErrClaimSkipped) {
-		t.Errorf("release with the breaker open: err = %v, want ErrClaimSkipped", err)
+	if err := gd.Release([]byte("k")); !errors.Is(err, errDown) {
+		t.Errorf("release with the breaker open: err = %v, want the backend's error", err)
 	}
-	if down.count() != 1 {
-		t.Errorf("backend asked %d times, want 1 (the release was skipped)", down.count())
+	if down.count() != 2 {
+		t.Errorf("backend asked %d times, want 2 (the release is not skipped)", down.count())
+	}
+	if _, err := gd.SetNX([]byte("k"), []byte("1"), time.Minute); !errors.Is(err, ErrClaimSkipped) {
+		t.Errorf("claim after the release: err = %v, want ErrClaimSkipped (the breaker is still open)", err)
+	}
+
+	up := &heldDedup{}
+	gu := Guard(up, br) // the breaker is open from the failed claim above
+	if err := gu.Release([]byte("k")); err != nil {
+		t.Errorf("release against a working backend with the breaker open: %v", err)
 	}
 }

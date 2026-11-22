@@ -267,6 +267,21 @@ func (c *Client) recover(ctx context.Context, j job) {
 			claim = key
 		}
 	}
+	// Give the claim back on every way out but a recovery: held for the window
+	// it would turn every later NACK for the gap into an in-flight dedup, and
+	// the gap could not be recovered for that long even once an upstream has
+	// the frame. That covers a fetch that found the frame nowhere and one cut
+	// short by shutdown. A recovery that succeeded keeps its claim, so
+	// siblings share it.
+	recovered := false
+	defer func() {
+		if claim == nil || recovered {
+			return
+		}
+		if err := c.cfg.Dedup.Release(claim); err != nil && !errors.Is(err, cache.ErrClaimSkipped) {
+			c.log.Debug("proxy in-flight claim release error", "err", err)
+		}
+	}()
 
 	for i := 0; i < c.cfg.MaxEndpoints; i++ {
 		select {
@@ -305,21 +320,14 @@ func (c *Client) recover(ctx context.Context, j job) {
 			c.cfg.Rec.ProxyRecovered()
 		}
 		c.log.Debug("proxy recovered frame", "hash_key", j.hashKey, "seq_num", j.seq, "upstream", c.cfg.Upstreams[i])
+		recovered = true
 		return
 	}
 
 	if c.cfg.Rec != nil {
 		c.cfg.Rec.ProxyFailed("exhausted")
 	}
-	// No upstream had the frame. Give the claim back: held for the window it
-	// would turn every later NACK for the gap into an in-flight dedup, and the
-	// gap could not be recovered for that long even once an upstream has the
-	// frame. A recovery that succeeded keeps its claim, so siblings share it.
-	if claim != nil {
-		if err := c.cfg.Dedup.Release(claim); err != nil && !errors.Is(err, cache.ErrClaimSkipped) {
-			c.log.Debug("proxy in-flight claim release error", "err", err)
-		}
-	}
+	// No upstream had the frame: the deferred release gives the claim back.
 	c.log.Debug("proxy recovery failed", "hash_key", j.hashKey, "seq_num", j.seq)
 }
 

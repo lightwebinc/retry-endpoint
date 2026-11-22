@@ -128,15 +128,12 @@ func (g *GuardedDeduper) SetNX(key, value []byte, ttl time.Duration) (bool, erro
 	return set, err
 }
 
-// Release gives back a claim this endpoint made, through the breaker like a
-// claim: while it is open the backend is not asked (ErrClaimSkipped), and the
-// claim lapses at its TTL instead.
+// Release gives back a claim this endpoint made. It always asks the backend,
+// even while the breaker is open: the breaker opens on a single failed claim,
+// and a release skipped then would leave the claim held for its whole TTL, so
+// every later NACK for the gap would read as a sibling's fetch in flight. Its
+// outcome is not fed to the breaker: a release is best-effort cleanup, and only
+// claims decide whether claims are skipped.
 func (g *GuardedDeduper) Release(key []byte) error {
-	ok, probe := g.br.admit()
-	if !ok {
-		return ErrClaimSkipped
-	}
-	err := g.d.Delete(key)
-	g.br.done(probe, err)
-	return err
+	return g.d.Delete(key)
 }
