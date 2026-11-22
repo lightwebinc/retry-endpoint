@@ -97,15 +97,22 @@ func (b *Breaker) done(probe bool, err error) {
 	}
 }
 
-// GuardedDeduper is a Deduper behind a Breaker.
+// Claimer is a Deduper whose claims can be given back (implemented by
+// *Store).
+type Claimer interface {
+	Deduper
+	Delete(key []byte) error
+}
+
+// GuardedDeduper is a Claimer behind a Breaker.
 type GuardedDeduper struct {
-	d  Deduper
+	d  Claimer
 	br *Breaker
 }
 
 // Guard puts d behind br. Claims made on one backend should share br, so a
 // failure seen by one of them spares the others the wait.
-func Guard(d Deduper, br *Breaker) *GuardedDeduper {
+func Guard(d Claimer, br *Breaker) *GuardedDeduper {
 	return &GuardedDeduper{d: d, br: br}
 }
 
@@ -119,4 +126,17 @@ func (g *GuardedDeduper) SetNX(key, value []byte, ttl time.Duration) (bool, erro
 	set, err := g.d.SetNX(key, value, ttl)
 	g.br.done(probe, err)
 	return set, err
+}
+
+// Release gives back a claim this endpoint made, through the breaker like a
+// claim: while it is open the backend is not asked (ErrClaimSkipped), and the
+// claim lapses at its TTL instead.
+func (g *GuardedDeduper) Release(key []byte) error {
+	ok, probe := g.br.admit()
+	if !ok {
+		return ErrClaimSkipped
+	}
+	err := g.d.Delete(key)
+	g.br.done(probe, err)
+	return err
 }

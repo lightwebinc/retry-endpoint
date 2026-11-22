@@ -566,7 +566,9 @@ downstream endpoints from all proxying the same gap (with unicast retransmit
 on, the claim is per requester, since a unicast copy serves only the listener
 that asked). Effective only with a shared dedup backend (`-cache-backend
 redis`/`aerospike`, or `-redis-addr` alongside `memory`); without one no claim
-is made, every miss is fetched, and a startup warning is logged. A claim the
+is made, every miss is fetched, and a startup warning is logged. A recovery
+that finds the frame on no upstream releases its claim at once, so the gap's
+next NACK fetches again; a successful one keeps it for this window. A claim the
 backend cannot answer fails open the same way: the gap is fetched, and the
 error is counted in `bre_dedup_errors_total{claim="proxy"}` and logged at most
 once per 30 s. The claim shares the retransmit claim's

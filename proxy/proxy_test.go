@@ -88,6 +88,13 @@ func (d *fakeDedup) SetNX(key, _ []byte, _ time.Duration) (bool, error) {
 	return true, nil
 }
 
+func (d *fakeDedup) Release(key []byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.seen, string(key))
+	return nil
+}
+
 // fakeUpstream is a UDP server emulating an upstream retry-endpoint. It either
 // returns ACK + frame, just MISS, or nothing (timeout).
 type fakeUpstream struct {

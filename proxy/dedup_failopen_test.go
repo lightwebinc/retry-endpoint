@@ -27,6 +27,8 @@ func (d *failingDedup) SetNX(_, _ []byte, _ time.Duration) (bool, error) {
 	return false, errors.New("dedup backend unreachable")
 }
 
+func (d *failingDedup) Release([]byte) error { return errors.New("dedup backend unreachable") }
+
 // serveMetrics starts rec's HTTP endpoint on a free loopback port and returns
 // its address.
 func serveMetrics(t *testing.T, rec *metrics.Recorder) string {
@@ -134,6 +136,8 @@ func (d *skippingDedup) SetNX(_, _ []byte, _ time.Duration) (bool, error) {
 	d.calls.Add(1)
 	return false, cache.ErrClaimSkipped
 }
+
+func (d *skippingDedup) Release([]byte) error { return cache.ErrClaimSkipped }
 
 // A skipped in-flight claim fails open at once like a failed one, counted as
 // a skip, not an error, and not logged.

@@ -25,6 +25,13 @@ func (d *scriptedDedup) SetNX(_, _ []byte, _ time.Duration) (bool, error) {
 	return d.err == nil, d.err
 }
 
+func (d *scriptedDedup) Delete([]byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls++
+	return d.err
+}
+
 func (d *scriptedDedup) set(err error) {
 	d.mu.Lock()
 	d.err = err
@@ -199,8 +206,13 @@ func TestGuard_PassesAnswers(t *testing.T) {
 	}
 }
 
-// heldDedup admits a key once.
+// heldDedup admits a key once until it is deleted.
 type heldDedup struct{ seen map[string]bool }
+
+func (d *heldDedup) Delete(key []byte) error {
+	delete(d.seen, string(key))
+	return nil
+}
 
 func (d *heldDedup) SetNX(key, _ []byte, _ time.Duration) (bool, error) {
 	if d.seen == nil {
@@ -211,4 +223,34 @@ func (d *heldDedup) SetNX(key, _ []byte, _ time.Duration) (bool, error) {
 	}
 	d.seen[string(key)] = true
 	return true, nil
+}
+
+// A released claim can be made again; while the breaker is open the release
+// is skipped like a claim, and the claim lapses at its TTL.
+func TestGuard_Release(t *testing.T) {
+	var logs bytes.Buffer
+	br, _ := newTestBreaker(time.Second, &logs)
+	held := &heldDedup{}
+	g := Guard(held, br)
+	if set, _ := g.SetNX([]byte("k"), []byte("1"), time.Minute); !set {
+		t.Fatal("first claim not made")
+	}
+	if err := g.Release([]byte("k")); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if set, err := g.SetNX([]byte("k"), []byte("1"), time.Minute); !set || err != nil {
+		t.Fatalf("claim after release = (%v, %v), want (true, nil)", set, err)
+	}
+
+	down := &scriptedDedup{err: errDown}
+	gd := Guard(down, br)
+	if _, err := gd.SetNX([]byte("k"), []byte("1"), time.Minute); !errors.Is(err, errDown) {
+		t.Fatalf("claim against a failing backend: %v", err)
+	}
+	if err := gd.Release([]byte("k")); !errors.Is(err, ErrClaimSkipped) {
+		t.Errorf("release with the breaker open: err = %v, want ErrClaimSkipped", err)
+	}
+	if down.count() != 1 {
+		t.Errorf("backend asked %d times, want 1 (the release was skipped)", down.count())
+	}
 }

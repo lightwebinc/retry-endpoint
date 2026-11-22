@@ -180,7 +180,9 @@ downstream consumer        downstream retry-EP            upstream retry-EP
   claim (`bre:proxy:` prefix, `-proxy-dedup-window` TTL) ensures only one
   downstream endpoint recovers a given gap (one per requester when unicast
   retransmit is on); without one no claim is made and siblings may each proxy
-  (logged at startup). A claim the backend cannot answer fails open like the
+  (logged at startup). A recovery that finds the frame on no upstream releases
+  its claim, so the gap's next NACK fetches again; one that recovers it keeps
+  the claim for the window. A claim the backend cannot answer fails open like the
   retransmit claim: the gap is recovered anyway, and the error is counted in
   `bre_dedup_errors_total{claim="proxy"}` and logged at most once per 30 s.
   It shares the retransmit claim's client, `-dedup-claim-timeout` and breaker
