@@ -52,6 +52,7 @@ func TestAllCountersSafeToCall(t *testing.T) {
 	r.Retransmit()
 	r.RetransmitDedup()
 	r.DedupError("retransmit")
+	r.DedupSkipped("retransmit")
 	r.ResponseSent("ack")
 	r.ResponseSent("miss")
 	r.ResponseSendError("ack")
@@ -219,13 +220,36 @@ func TestDedupErrorByClaim(t *testing.T) {
 	r.DedupError("retransmit")
 	r.DedupError("retransmit")
 	r.DedupError("proxy")
+	if got := claimCounts(t, r, "bre_dedup_errors_total"); got["retransmit"] != 2 || got["proxy"] != 1 || len(got) != 2 {
+		t.Errorf("bre_dedup_errors_total by claim = %v, want retransmit=2, proxy=1", got)
+	}
+}
+
+// A claim the breaker skipped is exported per claim too, apart from the
+// errors, so a dashboard tells "the backend failed" from "claims are off".
+func TestDedupSkippedByClaim(t *testing.T) {
+	r := newRecorder(t)
+	r.DedupSkipped("retransmit")
+	r.DedupSkipped("proxy")
+	r.DedupSkipped("proxy")
+	if got := claimCounts(t, r, "bre_dedup_skipped_total"); got["retransmit"] != 1 || got["proxy"] != 2 || len(got) != 2 {
+		t.Errorf("bre_dedup_skipped_total by claim = %v, want retransmit=1, proxy=2", got)
+	}
+	if got := claimCounts(t, r, "bre_dedup_errors_total"); len(got) != 0 {
+		t.Errorf("skips counted as errors: %v", got)
+	}
+}
+
+// claimCounts returns metric name's value per claim label.
+func claimCounts(t *testing.T, r *Recorder, name string) map[string]float64 {
+	t.Helper()
 	mfs, err := r.promReg.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := map[string]float64{}
 	for _, mf := range mfs {
-		if mf.GetName() != "bre_dedup_errors_total" {
+		if mf.GetName() != name {
 			continue
 		}
 		for _, m := range mf.GetMetric() {
@@ -236,9 +260,7 @@ func TestDedupErrorByClaim(t *testing.T) {
 			}
 		}
 	}
-	if got["retransmit"] != 2 || got["proxy"] != 1 || len(got) != 2 {
-		t.Errorf("bre_dedup_errors_total by claim = %v, want retransmit=2, proxy=1", got)
-	}
+	return got
 }
 
 // FrameCached keeps one measurement option per source; the exported series

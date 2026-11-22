@@ -47,6 +47,15 @@ const (
 	defaultCacheTTLBEEF    = 60 * time.Second // BRC-148 BEEF object (live-tail resend window)
 )
 
+// Dedup claim defaults. A claim delays the repair it gates, so its timeout is
+// tens of milliseconds, against well under one for a same-site Redis; the
+// breaker then spares the repairs behind a failed claim the same wait for a
+// few seconds at a time.
+const (
+	DefaultDedupClaimTimeout  = 25 * time.Millisecond
+	DefaultDedupBreakerWindow = 5 * time.Second
+)
+
 // Scopes maps a human-readable scope name to the two-byte big-endian IPv6
 // multicast prefix. See RFC 4291 §2.7.
 var Scopes = map[string]uint16{
@@ -141,6 +150,8 @@ type Config struct {
 	EgressIfaces        []string      // NIC names for multicast egress
 	EgressPort          int           // Destination UDP port for retransmitted frames
 	DedupWindow         time.Duration // Deduplication window (default 60s)
+	DedupClaimTimeout   time.Duration // per-claim backend timeout of the dedup claims (retransmit and NACK proxy), on a client of their own (default 25ms)
+	DedupBreakerWindow  time.Duration // after a claim fails, claims are skipped this long, then one probe decides (default 5s; 0 = no breaker)
 	EgressMulticastLoop bool          // IPV6_MULTICAST_LOOP on the retransmit socket; REQUIRED on a collapsed/mesh router node where egress rides a dummy mc-local iface, the kernel only submits locally-originated multicast to the MFC (for forwarding onto tunnels) when loop is on. Mirrors shard-proxy EGRESS_MULTICAST_LOOP. Default off.
 
 	// NACK proxying (cross-domain recovery). When enabled, a cache miss
@@ -292,6 +303,10 @@ func Load() (*Config, error) {
 		"destination UDP port for retransmitted frames")
 	flag.DurationVar(&c.DedupWindow, "dedup-window", envDuration("DEDUP_WINDOW", 60*time.Second),
 		"retransmission deduplication window")
+	flag.DurationVar(&c.DedupClaimTimeout, "dedup-claim-timeout", envDuration("DEDUP_CLAIM_TIMEOUT", DefaultDedupClaimTimeout),
+		"per-claim timeout of the cross-instance dedup claims (retransmit and NACK proxy), which run on a backend client of their own: a claim not answered in time fails open (the frame is sent without it)")
+	flag.DurationVar(&c.DedupBreakerWindow, "dedup-breaker-window", envDuration("DEDUP_BREAKER_WINDOW", DefaultDedupBreakerWindow),
+		"after a dedup claim fails, skip claims for this long (fail open at once), then let one probe claim decide whether they resume; 0 = no breaker (every claim waits on the backend)")
 
 	flag.BoolVar(&c.ProxyEnabled, "proxy-enabled", envBool("PROXY_ENABLED", false),
 		"recover cache misses from an upstream retry-endpoint (cross-domain NACK proxying)")
@@ -576,6 +591,15 @@ func Load() (*Config, error) {
 		if ttl <= 0 {
 			return nil, fmt.Errorf("%s must be > 0, got %s", name, ttl)
 		}
+	}
+
+	// Dedup claims: the claim timeout must be positive; a breaker window of 0
+	// turns the breaker off.
+	if c.DedupClaimTimeout <= 0 {
+		return nil, fmt.Errorf("dedup-claim-timeout must be > 0, got %s", c.DedupClaimTimeout)
+	}
+	if c.DedupBreakerWindow < 0 {
+		return nil, fmt.Errorf("dedup-breaker-window must be >= 0 (0 = no breaker), got %s", c.DedupBreakerWindow)
 	}
 
 	// Ingress workers partition the groups: each socket joins every Nth group

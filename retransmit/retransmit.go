@@ -237,12 +237,24 @@ func (r *Retransmitter) targetGroup(raw []byte, txID [32]byte) (*net.UDPAddr, er
 // and logged at most once per DedupErrorLogWindow. An endpoint whose
 // dedup-only backend (-redis-addr beside the memory cache) is unreachable at
 // startup runs without cross-instance dedup the same way.
+//
+// The claim waits at most -dedup-claim-timeout, and after one fails the claim
+// breaker skips claims for -dedup-breaker-window (cache.ErrClaimSkipped,
+// counted in bre_dedup_skipped_total): the frame is then sent at once. A
+// backend that stops answering delays the claims in flight when it fails,
+// then one probe per window, by one claim timeout each.
 func (r *Retransmitter) Retransmit(raw []byte, txID [32]byte) error {
 	// Cross-instance deduplication via backend SETNX.
 	if r.dedup != nil {
 		dedupKey := r.buildDedupKey(raw)
 		if len(dedupKey) > 0 {
 			switch set, err := r.dedup.SetNX(dedupKey, []byte("1"), r.dedupWindow); {
+			case errors.Is(err, cache.ErrClaimSkipped):
+				// The backend failed a recent claim: send without one,
+				// at once. Counted, not logged: the failure was.
+				if r.rec != nil {
+					r.rec.DedupSkipped("retransmit")
+				}
 			case err != nil:
 				r.dedupError(err)
 			case !set:

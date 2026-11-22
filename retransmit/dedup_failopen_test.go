@@ -149,3 +149,50 @@ func TestRetransmit_RedisGoneFailsOpen(t *testing.T) {
 		t.Fatalf("retransmit with redis gone: err = %v, want the frame sent (fail open)", err)
 	}
 }
+
+// skippingDedup is a claim breaker that is open: every claim is skipped
+// without reaching the backend.
+type skippingDedup struct{ calls atomic.Int64 }
+
+func (d *skippingDedup) SetNX(_, _ []byte, _ time.Duration) (bool, error) {
+	d.calls.Add(1)
+	return false, cache.ErrClaimSkipped
+}
+
+// A claim the breaker skipped (a recent claim failed) fails open at once, like
+// a failed claim, but it is counted apart, as a skip, and not logged: the
+// failure that opened the breaker was.
+func TestRetransmit_ClaimSkippedFailsOpen(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(prev)
+
+	rec, err := metrics.New("retransmit-test", 1, "", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := serveMetrics(t, rec)
+
+	r := New(shard.New(0xFF05, shard.DefaultGroupID, 2), nil, 9001, time.Minute, &skippingDedup{}, rec, false)
+	raw := make([]byte, 100)
+	raw[55] = 1
+	const n = 20
+	for i := 0; i < n; i++ {
+		if err := r.Retransmit(raw, [32]byte{}); err != nil {
+			t.Fatalf("retransmit %d with the claim skipped: err = %v, want the frame sent", i, err)
+		}
+	}
+	if got := scrape(t, addr, "bre_dedup_skipped_total", `claim="retransmit"`); got != n {
+		t.Errorf(`bre_dedup_skipped_total{claim="retransmit"} = %v, want %d`, got, n)
+	}
+	if got := scrape(t, addr, "bre_dedup_errors_total", ""); got != 0 {
+		t.Errorf("bre_dedup_errors_total = %v, want 0: a skip is not a backend error", got)
+	}
+	if got := scrape(t, addr, "bre_retransmit_dedup_total", ""); got != 0 {
+		t.Errorf("bre_retransmit_dedup_total = %v, want 0: a skip is not a sibling's claim", got)
+	}
+	if got := warnLines(logs.String()); got != 0 {
+		t.Errorf("%d warn/error lines for skipped claims, want none:\n%s", got, logs.String())
+	}
+}

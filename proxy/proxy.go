@@ -38,6 +38,7 @@ import (
 	"github.com/lightwebinc/shard-common/frame"
 	"github.com/lightwebinc/shard-common/logging"
 
+	"github.com/lightwebinc/retry-endpoint/cache"
 	"github.com/lightwebinc/retry-endpoint/metrics"
 	"github.com/lightwebinc/retry-endpoint/retransmit"
 )
@@ -242,8 +243,13 @@ func (c *Client) recover(ctx context.Context, j job) {
 		// A claim the backend cannot answer fails OPEN, as the retransmit
 		// claim does: the gap is recovered without one. The worst case is a
 		// sibling fetching the same gap; failing closed would leave it
-		// unrecovered for as long as the backend is out.
+		// unrecovered for as long as the backend is out. A claim the breaker
+		// skipped (a recent claim failed) fails open at once.
 		switch set, err := c.cfg.Dedup.SetNX(claim, []byte("1"), c.cfg.DedupWindow); {
+		case errors.Is(err, cache.ErrClaimSkipped):
+			if c.cfg.Rec != nil {
+				c.cfg.Rec.DedupSkipped("proxy")
+			}
 		case err != nil:
 			c.dedupError(err)
 		case !set:

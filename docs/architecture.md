@@ -183,11 +183,14 @@ downstream consumer        downstream retry-EP            upstream retry-EP
   (logged at startup). A claim the backend cannot answer fails open like the
   retransmit claim: the gap is recovered anyway, and the error is counted in
   `bre_dedup_errors_total{claim="proxy"}` and logged at most once per 30 s.
+  It shares the retransmit claim's client, `-dedup-claim-timeout` and breaker
+  (see [Cross-instance deduplication](#cross-instance-deduplication)).
 - **Scope:** BRC-124/128 tx frames (the bridged hot path). Control-plane frames
   are not bridged onto the downstream domain, so use redundant bridges for them.
 - **Metrics:** `bre_proxy_requests_total`, `bre_proxy_recovered_total`,
   `bre_proxy_failed_total{reason}`, `bre_proxy_inflight_dedup_total`,
-  `bre_proxy_queue_dropped_total`, `bre_dedup_errors_total{claim="proxy"}`.
+  `bre_proxy_queue_dropped_total`, `bre_dedup_errors_total{claim="proxy"}`,
+  `bre_dedup_skipped_total{claim="proxy"}`.
   The endpoint also advertises ADVERT
   `HasParent` (`0x0002`) while proxying is enabled.
 
@@ -506,6 +509,24 @@ leave every gap unrepaired for as long as the backend is out. Each such error
 is counted in `bre_dedup_errors_total{claim="retransmit"}` and logged at most
 once per 30 s, with the number of errors not logged since the last line.
 
+Failing open must also be fast, because the frame waits for its claim. Both
+claims (this one and the NACK proxy's in-flight claim) therefore:
+
+- run on a backend client of their own, opened with `-dedup-claim-timeout`
+  (25 ms) as its per-operation timeout. The frame store's
+  `-cache-op-timeout` (1 s) would otherwise bound them, and a backend that
+  stops answering without closing its connections makes a claim wait that
+  long, past the point where the listener gives up on the repair;
+- sit behind one claim breaker. The first claim that fails opens it, and for
+  `-dedup-breaker-window` (5 s) claims are skipped (the frame is sent at once,
+  counted in `bre_dedup_skipped_total{claim}`). After the window one claim
+  probes the backend while the others are still skipped; success closes the
+  breaker, failure skips claims for another window.
+
+A dedup backend that dies thus delays the claims in flight at that moment,
+then one probe per window, by one claim timeout each. The breaker logs once
+when claims start failing and once when they are answered again.
+
 ## Beacon discovery (BRC-126)
 
 The beacon sender runs as a separate goroutine and fires every `beacon-interval`
@@ -605,7 +626,7 @@ retry-endpoint/
   main.go          entry point; wires config → cache → ingress → server → beacon
   config/          runtime configuration (flags + env vars + validation)
   ingress/         group-partitioned multicast receive workers + loopback tee and tee ring ingest; writes to cache
-  cache/           Store adapter over the shard-common cache.Backend (memory / redis / aerospike)
+  cache/           Store adapter over the shard-common cache.Backend (memory / redis / aerospike); dedup claim breaker
   server/          UDP NACK receive pool; rate-limit → cache lookup → retransmit
   retransmit/      multicast + unicast retransmit egress; cross-instance dedup
   proxy/           cross-domain NACK proxying: recover misses from upstream, re-cache

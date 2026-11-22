@@ -60,6 +60,7 @@ type Recorder struct {
 	unicastRetransmits metric.Int64Counter
 	retransmitDedup    metric.Int64Counter
 	dedupErrors        metric.Int64Counter // labeled claim={retransmit,proxy}
+	dedupSkipped       metric.Int64Counter // labeled claim={retransmit,proxy}
 	responsesSent      metric.Int64Counter // labeled type={ack,miss}
 	responseSendErrors metric.Int64Counter
 
@@ -196,6 +197,10 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		metric.WithDescription("Cross-instance dedup claims (SET NX) the shared backend could not answer, by claim: retransmit = the multicast retransmit claim, proxy = the NACK proxy's in-flight claim. Each one fails open: the frame is sent, or the gap recovered, without a claim")); err != nil {
 		return nil, err
 	}
+	if r.dedupSkipped, err = meter.Int64Counter("bre_dedup_skipped_total",
+		metric.WithDescription("Cross-instance dedup claims not sent to the backend because a recent claim failed and the claim breaker is open (-dedup-breaker-window), by claim. Each one fails open at once")); err != nil {
+		return nil, err
+	}
 	if r.proxyRequests, err = meter.Int64Counter("bre_proxy_requests_total",
 		metric.WithDescription("Cross-domain NACK proxy recovery jobs started")); err != nil {
 		return nil, err
@@ -295,6 +300,15 @@ func (r *Recorder) RetransmitDedup() {
 // (the NACK proxy's in-flight claim); both fail open.
 func (r *Recorder) DedupError(claim string) {
 	r.dedupErrors.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String("claim", claim),
+	))
+}
+
+// DedupSkipped records a dedup claim the claim breaker kept from the backend
+// (a recent claim failed). claim is labeled as for DedupError; the claim fails
+// open at once.
+func (r *Recorder) DedupSkipped(claim string) {
+	r.dedupSkipped.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("claim", claim),
 	))
 }
