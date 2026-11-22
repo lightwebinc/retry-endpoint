@@ -468,7 +468,11 @@ node with a real fabric NIC.
 Cross-instance retransmission deduplication window. With a shared dedup backend
 (`-cache-backend redis`/`aerospike`, or `-redis-addr` alongside `memory`), the
 first endpoint to serve a NACK claims the frame with a `SET NX` for this
-duration. Other endpoints with the same request skip their send.
+duration. Other endpoints with the same request skip their send. That holds
+for each requester's first NACK for the frame; a requester that asks again
+inside the window did not receive the copy, and its repeat is sent (marked per
+requester source IP in the same store, counted in
+`bre_retransmit_repeats_total`).
 
 A claim the backend cannot answer fails open: the frame is sent without one
 (a sibling may then send it too), the error is counted in
@@ -935,6 +939,7 @@ own, so it exports none. At startup the endpoint emits a one-shot
 | `bre_responses_sent_total{type=ack\|miss\|throttled}`            | ACK/MISS/THROTTLED responses successfully written to the NACK socket |
 | `bre_response_send_errors_total{type}`                           | ACK/MISS/THROTTLED responses that failed to send (`WriteTo` error)  |
 | `bre_retransmit_dedup_total`                                     | Retransmits skipped by cross-instance dedup (shared dedup backend)  |
+| `bre_retransmit_repeats_total`                                   | Multicast retransmits sent for a requester's repeat NACK past the dedup claim (its earlier copy did not arrive) |
 | `bre_dedup_errors_total{claim=retransmit\|proxy}`                | Dedup claims the shared backend could not answer; each failed open (frame sent, gap recovered) |
 | `bre_dedup_skipped_total{claim=retransmit\|proxy}`               | Dedup claims the claim breaker kept from the backend after a failure (`-dedup-breaker-window`); each failed open at once |
 | `bre_rate_limit_drops_total{level=ip\|chain\|sequence\|group}`   | Requests dropped (or retransmit suppressed) by rate limiter tier    |

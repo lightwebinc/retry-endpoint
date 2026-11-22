@@ -391,8 +391,9 @@ datagram a worker:
 4. On **hit**: dispatches `retransmit.Send`, then sends a 16-byte ACK (unless
    `-suppress-ack`) whose Flags record what was dispatched (`0x01` multicast,
    `0x02` unicast). ACK means "retransmit dispatched": when a send was attempted
-   and nothing went on the wire (the multicast copy was dedup-suppressed because
-   a sibling already claimed the frame, or the unicast write failed), the
+   and nothing went on the wire (the multicast copy of a requester's first NACK
+   was dedup-suppressed because a sibling, or an earlier NACK, already sent the
+   frame, or the unicast write failed), the
    corresponding flag stays clear, and with no flag set at all **no ACK is
    sent**, so the requester escalates instead of closing a gap nothing repaired.
    (An endpoint configured with neither send mode still answers a bare ACK: that
@@ -502,6 +503,19 @@ acquire the key wins; others skip the send (`ErrDedupSuppressed`, counted in
 or send no ACK at all if nothing else was dispatched, so the requester never
 closes a gap on the strength of a sibling's copy (see the NACK server hit path
 above).
+
+That rule applies to each requester's **first** NACK for a frame: the NACKs of
+one loss, from any number of listeners to any number of endpoints, get one
+copy. A requester that asks again inside the window did not receive that copy,
+so its repeat is sent whatever the claim says. Every NACK also sets a mark for
+its requester in the same store (`HashKey∥SeqNum∥source IP`, the same window);
+a NACK that finds its own requester's mark already set is a repeat, and is
+counted in `bre_retransmit_repeats_total`. The mark is shared like the claim,
+so a repeat that reaches a sibling, as a listener's next round goes to the
+next endpoint, is recognized there too. It keys on the source address alone
+because a listener sends each NACK from a fresh port. Without it, the claim
+held every repeat for the whole window (60 s by default), past a listener's
+last round, and a frame whose one copy was lost became an unrecoverable gap.
 
 A claim the backend cannot answer (down, timed out, refused) **fails open**:
 the frame is sent without a claim, as if no backend were configured, which is

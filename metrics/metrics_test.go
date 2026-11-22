@@ -51,6 +51,7 @@ func TestAllCountersSafeToCall(t *testing.T) {
 	r.NACKRequest()
 	r.Retransmit()
 	r.RetransmitDedup()
+	r.RetransmitRepeat()
 	r.DedupError("retransmit")
 	r.DedupSkipped("retransmit")
 	r.ResponseSent("ack")

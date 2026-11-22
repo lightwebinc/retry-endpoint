@@ -59,6 +59,7 @@ type Recorder struct {
 	retransmits        metric.Int64Counter
 	unicastRetransmits metric.Int64Counter
 	retransmitDedup    metric.Int64Counter
+	retransmitRepeats  metric.Int64Counter
 	dedupErrors        metric.Int64Counter // labeled claim={retransmit,proxy}
 	dedupSkipped       metric.Int64Counter // labeled claim={retransmit,proxy}
 	responsesSent      metric.Int64Counter // labeled type={ack,miss}
@@ -193,6 +194,10 @@ func New(instanceID string, numWorkers int, otlpEndpoint string, otlpInterval ti
 		metric.WithDescription("Retransmissions dropped due to deduplication")); err != nil {
 		return nil, err
 	}
+	if r.retransmitRepeats, err = meter.Int64Counter("bre_retransmit_repeats_total",
+		metric.WithDescription("Multicast retransmits sent for a requester's repeat NACK, past the cross-instance claim: it asked for the frame inside -dedup-window and the copy did not arrive")); err != nil {
+		return nil, err
+	}
 	if r.dedupErrors, err = meter.Int64Counter("bre_dedup_errors_total",
 		metric.WithDescription("Cross-instance dedup claims (SET NX) the shared backend could not answer, by claim: retransmit = the multicast retransmit claim, proxy = the NACK proxy's in-flight claim. Each one fails open: the frame is sent, or the gap recovered, without a claim")); err != nil {
 		return nil, err
@@ -293,6 +298,13 @@ func (r *Recorder) UnicastRetransmit() {
 
 func (r *Recorder) RetransmitDedup() {
 	r.retransmitDedup.Add(context.Background(), 1)
+}
+
+// RetransmitRepeat records a multicast retransmit let past the cross-instance
+// claim because its requester asked for the frame before and the copy did not
+// arrive.
+func (r *Recorder) RetransmitRepeat() {
+	r.retransmitRepeats.Add(context.Background(), 1)
 }
 
 // DedupError records a cross-instance dedup claim the shared backend could not
